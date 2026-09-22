@@ -8,6 +8,7 @@
     <Compile Include="ResourceLocators.fs" />
     <Compile Include="TestHierarchyTests.fs" />
     <Compile Include="TestPlatformTests.fs" />
+    <Compile Include="MtpMappingTests.fs" />
     <Compile Include="TestDiscoveryTests.fs" />
     <Compile Include="TestRunTests.fs" />
     <Compile Include="Main.fs" />

@@ -10,6 +10,7 @@ let private leaf fullName : TestItem =
     FullName = fullName
     DisplayName = fullName
     ExecutorUri = "executor://xunit/VsTestRunner2/netcoreapp"
+    PlatformUid = None
     ProjectFilePath = "/repo/Tests.fsproj"
     TargetFramework = "net8.0"
     CodeFilePath = None

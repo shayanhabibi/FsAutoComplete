@@ -18,6 +18,9 @@ type TestItem =
     /// Example: executor://xunit/VsTestRunner2/netcoreapp
     /// Used for determining the test library, which effects how tests names are broken down
     ExecutorUri: string
+    /// Addresses a runnable test to Microsoft.Testing.Platform, which identifies tests by opaque
+    /// uid. A grouping node and a test run under VSTest carry `None`.
+    PlatformUid: string option
     ProjectFilePath: string
     TargetFramework: string
     CodeFilePath: string option
@@ -86,6 +89,7 @@ module TestItem =
       FullName = fullName
       DisplayName = testCase.DisplayName
       ExecutorUri = testCase.ExecutorUri |> string
+      PlatformUid = None
       ProjectFilePath = projFilePath
       TargetFramework = targetFramework
       CodeFilePath = Some testCase.CodeFilePath
@@ -93,6 +97,44 @@ module TestItem =
         Some
           { StartLine = testCase.LineNumber
             EndLine = testCase.LineNumber } }
+
+  /// Stands in for the VSTest adapter uri on a platform that reports its own tree, where no
+  /// adapter-specific name breakdown applies.
+  [<Literal>]
+  let mtpExecutorUri = "microsoft.testing.platform"
+
+  /// Maps a node of a Microsoft.Testing.Platform test tree onto the shape the clients consume.
+  /// The platform reports parent links and grouping nodes itself, so the result needs no pass
+  /// through `TestHierarchy.withInferredGroupings`.
+  let ofMtpNode
+    (projFilePath: string)
+    (targetFramework: string)
+    (node: Partas.TestingPlatform.Client.TestNodeUpdate)
+    : TestItem =
+    let idOfUid = idOf projFilePath targetFramework
+
+    let range (location: Partas.TestingPlatform.Client.SourceLocation) =
+      location.LineStart
+      |> Option.map (fun startLine ->
+        { StartLine = startLine
+          EndLine = location.LineEnd |> Option.defaultValue startLine })
+
+    let isLeaf = node.NodeType <> Some Partas.TestingPlatform.Client.NodeType.Group
+
+    { Id = idOfUid node.Uid
+      ParentId =
+        node.ParentUid
+        |> Option.filter (String.IsNullOrEmpty >> not)
+        |> Option.map idOfUid
+      IsLeaf = isLeaf
+      FullName = node.DisplayName |> Option.defaultValue node.Uid
+      DisplayName = node.DisplayName |> Option.defaultValue node.Uid
+      ExecutorUri = mtpExecutorUri
+      PlatformUid = (if isLeaf then Some node.Uid else None)
+      ProjectFilePath = projFilePath
+      TargetFramework = targetFramework
+      CodeFilePath = node.Location |> Option.map _.File
+      CodeLocationRange = node.Location |> Option.bind range }
 
   let tryTestCaseToDTO
     (projectLookup: string -> Ionide.ProjInfo.Types.ProjectOptions option)
@@ -130,12 +172,13 @@ module TestHierarchy =
         IsLeaf = false
         FullName = fullName
         DisplayName = (splitSegments fullName |> List.last).Text
+        PlatformUid = None
         CodeFilePath = None
         CodeLocationRange = None }
 
   /// Returns the given tests plus a grouping node per name segment they share, each node
-  /// linked to its parent. Ids are assigned here, so a caller may leave them unset. A leaf
-  /// keeps its own identity where a grouping name collides with it.
+  /// linked to its parent. A leaf without an id is given one derived from its name, and keeps
+  /// its own identity where a grouping name collides with it.
   let withInferredGroupings (tests: TestItem list) : TestItem list =
     let parentOf (item: TestItem) =
       ancestorNames item.FullName
@@ -145,8 +188,11 @@ module TestHierarchy =
     let leaves =
       tests
       |> List.map (fun leaf ->
-        { leaf with
-            Id = TestItem.idOf leaf.ProjectFilePath leaf.TargetFramework leaf.FullName })
+        if String.IsNullOrEmpty leaf.Id then
+          { leaf with
+              Id = TestItem.idOf leaf.ProjectFilePath leaf.TargetFramework leaf.FullName }
+        else
+          leaf)
 
     let groupings =
       leaves
@@ -158,6 +204,18 @@ module TestHierarchy =
     |> List.filter (fun node -> node.IsLeaf || not (leafIds.Contains node.Id))
     |> List.distinctBy _.Id
     |> List.map (fun node -> { node with ParentId = parentOf node })
+
+  /// Returns the nodes as a linked tree, one project at a time. A project whose platform reports
+  /// its own parent links is taken at its word; a project reported without any is grouped by the
+  /// segments of its test names.
+  let withHierarchy (nodes: TestItem list) : TestItem list =
+    nodes
+    |> List.groupBy (fun node -> node.ProjectFilePath, node.TargetFramework)
+    |> List.collect (fun (_, projectNodes) ->
+      if projectNodes |> List.exists (fun node -> node.ParentId.IsSome) then
+        projectNodes
+      else
+        withInferredGroupings projectNodes)
 
 [<RequireQualifiedAccess>]
 type TestPlatformKind =

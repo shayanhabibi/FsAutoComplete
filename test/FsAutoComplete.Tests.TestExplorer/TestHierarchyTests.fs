@@ -18,6 +18,60 @@ let private leaf fullName : TestItem =
 let private byFullName (items: TestItem list) = items |> List.map (fun i -> i.FullName) |> List.sort
 
 [<Tests>]
+let parameterisedCaseTests =
+  let fullNameOf executorUri fullName displayName =
+    TestItem.fullNameWithParameterisedCases executorUri fullName displayName
+
+  testList
+    "TestItem.fullNameWithParameterisedCases"
+    [ testCase "xunit theory cases nest under the method"
+      <| fun _ ->
+        let actual =
+          fullNameOf "executor://xunit/VsTestRunner2/netcoreapp" "Tests.Adds" "Tests.Adds(a: 1, b: 2)"
+
+        Expect.equal actual "Tests.Adds.Adds(a: 1, b: 2)" "the case parameters distinguish the case"
+
+      testCase "an xunit fact keeps its name"
+      <| fun _ ->
+        let actual =
+          fullNameOf "executor://xunit/VsTestRunner2/netcoreapp" "Tests.Adds" "Tests.Adds"
+
+        Expect.equal actual "Tests.Adds" "a fact has one case"
+
+      testCase "mstest data rows nest under the method"
+      <| fun _ ->
+        let actual = fullNameOf "executor://mstestadapter/v2" "Tests.Adds" "Adds (1,2)"
+
+        Expect.equal actual "Tests.Adds.Adds (1,2)" "the row data distinguishes the case"
+
+      testCase "a framework without parameterised naming keeps the reported name"
+      <| fun _ ->
+        let actual = fullNameOf "executor://yolodev/expecto" "Tests.My test" "My test"
+
+        Expect.equal actual "Tests.My test" "Expecto reports one name per test"
+
+      testCase "xunit theory cases of one method stay distinct"
+      <| fun _ ->
+        let executorUri = "executor://xunit/VsTestRunner2/netcoreapp"
+
+        let case parameters =
+          let testCase =
+            Microsoft.VisualStudio.TestPlatform.ObjectModel.TestCase(
+              "Tests.Adds",
+              System.Uri executorUri,
+              "/repo/bin/Tests.dll"
+            )
+
+          testCase.DisplayName <- $"Tests.Adds{parameters}"
+          TestItem.ofVsTestCase "/repo/Tests.fsproj" "net8.0" testCase
+
+        let actual =
+          TestHierarchy.withInferredGroupings [ case "(a: 1)"; case "(a: 2)" ]
+          |> List.filter _.IsLeaf
+
+        Expect.hasLength actual 2 "both theory cases survive" ]
+
+[<Tests>]
 let tests =
   testList
     "TestHierarchy"

@@ -24,21 +24,66 @@ type TestItem =
     CodeLocationRange: TestFileRange option
   }
 
+[<RequireQualifiedAccess>]
+type TestFrameworkId =
+  | NUnit
+  | MsTest
+  | XUnit
+  | Expecto
+
+module TestFrameworkId =
+  let tryOfExecutorUri (executorUri: string) =
+    let startsWith (prefix: string) = executorUri.StartsWith(prefix, StringComparison.Ordinal)
+
+    if startsWith "executor://nunit" then
+      Some TestFrameworkId.NUnit
+    elif startsWith "executor://mstest" then
+      Some TestFrameworkId.MsTest
+    elif startsWith "executor://xunit" then
+      Some TestFrameworkId.XUnit
+    elif startsWith "executor://yolodev" then
+      Some TestFrameworkId.Expecto
+    else
+      None
+
 module TestItem =
   /// Unique within a server session: a name repeated across projects or target frameworks
   /// yields a different id per project and framework.
   let idOf (projFilePath: string) (targetFramework: string) (fullName: string) =
     $"{projFilePath}|{targetFramework}|{fullName}"
 
+  /// The name that identifies a single test case. xUnit and MSTest report every case of a
+  /// parameterised test under one fully-qualified name and vary only the display name, so the
+  /// case data is appended to keep the cases apart.
+  let fullNameWithParameterisedCases (executorUri: string) (fullName: string) (displayName: string) =
+    match TestFrameworkId.tryOfExecutorUri executorUri with
+    | Some TestFrameworkId.MsTest ->
+      if fullName.EndsWith(displayName, StringComparison.Ordinal) then
+        fullName
+      else
+        $"{fullName}.{displayName}"
+    | Some TestFrameworkId.XUnit ->
+      // xUnit repeats the fully-qualified name inside the display name and appends the case
+      // parameters to it rather than nesting them.
+      if displayName <> fullName then
+        let caseFragment = displayName.Split('.') |> Array.last
+        $"{fullName}.{caseFragment}"
+      else
+        fullName
+    | _ -> fullName
+
   let ofVsTestCase
     (projFilePath: string)
     (targetFramework: string)
     (testCase: Microsoft.VisualStudio.TestPlatform.ObjectModel.TestCase)
     : TestItem =
-    { Id = idOf projFilePath targetFramework testCase.FullyQualifiedName
+    let fullName =
+      fullNameWithParameterisedCases (string testCase.ExecutorUri) testCase.FullyQualifiedName testCase.DisplayName
+
+    { Id = idOf projFilePath targetFramework fullName
       ParentId = None
       IsLeaf = true
-      FullName = testCase.FullyQualifiedName
+      FullName = fullName
       DisplayName = testCase.DisplayName
       ExecutorUri = testCase.ExecutorUri |> string
       ProjectFilePath = projFilePath

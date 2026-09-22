@@ -145,6 +145,34 @@ let tests createServer =
             Expect.isFalse parent.IsLeaf "a grouping node is not runnable"
           } ]
       testList
+        "Microsoft.Testing.Platform"
+        [ testCaseAsync "it should discover the tests of a testing platform project"
+          <| async {
+            let workspaceRoot = Path.Combine(__SOURCE_DIRECTORY__, "MtpSampleProjects")
+
+            let! server, event =
+              serverInitialize
+                workspaceRoot
+                { defaultConfigDto with
+                    EnableTestingPlatform = Some true }
+                createServer
+
+            do! waitForWorkspaceFinishedParsing event
+            use server = server
+
+            Workspace.build workspaceRoot
+
+            let! res = server.TestDiscoverTests()
+
+            let actual =
+              res
+              |> TestDiscoveryResult.tryUnwrapTestDiscoveryResult
+              |> List.filter _.IsLeaf
+              |> List.map _.FullName
+
+            Expect.contains actual "Tests.My test" "the tests of a testing platform project are discovered"
+          } ]
+      testList
         "RunTests"
         [ testCaseAsync "it should report tests of all basic outcomes"
           <| async {

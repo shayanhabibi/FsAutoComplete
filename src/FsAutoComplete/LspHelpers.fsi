@@ -199,9 +199,15 @@ type TestDetectedNotification =
     Tests: TestAdapter.TestAdapterEntry<Range> array }
 
 type TestRunRequest =
-  { LimitToProjects: FilePath list option
+  {
+    LimitToProjects: FilePath list option
     TestCaseFilter: string option
-    AttachDebugger: bool }
+    /// Names the tests to run on Microsoft.Testing.Platform, by the uid each was discovered
+    /// under. Absent runs every test of the projects being run. A platform runs only the uids it
+    /// recognises, so a client need not say which project a uid came from.
+    TestUids: string array option
+    AttachDebugger: bool
+  }
 
 type TestLogMessage = { Level: string; Message: string }
 

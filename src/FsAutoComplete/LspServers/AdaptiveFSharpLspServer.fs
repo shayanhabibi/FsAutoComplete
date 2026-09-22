@@ -3590,7 +3590,7 @@ type AdaptiveFSharpLspServer
           )
 
           let! testDTOs =
-            state.RunTests p.LimitToProjects p.TestCaseFilter p.AttachDebugger
+            state.RunTests p.LimitToProjects p.TestCaseFilter p.TestUids p.AttachDebugger
             |> AsyncResult.mapError (fun msg -> JsonRpc.Error.InternalError msg)
 
           return Some { Content = CommandResponse.runTests FsAutoComplete.JsonSerializer.writeJson testDTOs }

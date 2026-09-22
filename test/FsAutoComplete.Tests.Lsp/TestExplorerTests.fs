@@ -160,6 +160,7 @@ let tests createServer =
             let runRequest: TestRunRequest =
               { LimitToProjects = None
                 TestCaseFilter = None
+                TestUids = None
                 AttachDebugger = false }
 
             let! res = server.TestRunTests(runRequest)
@@ -205,6 +206,7 @@ let tests createServer =
                 let runRequest: TestRunRequest =
                   { LimitToProjects = None
                     TestCaseFilter = None
+                    TestUids = None
                     AttachDebugger = true }
 
                 Async.RunSynchronously(
@@ -241,6 +243,7 @@ let tests createServer =
               server.TestRunTests(
                 { LimitToProjects = None
                   TestCaseFilter = Some "FullyQualifiedName~Tests.Expects environment variable"
+                  TestUids = None
                   AttachDebugger = false }
               )
 
@@ -273,6 +276,7 @@ let tests createServer =
                 { LimitToProjects =
                     Some [ Path.Combine(__SOURCE_DIRECTORY__, "SampleTestProjects", "Nope", "Nope.fsproj") ]
                   TestCaseFilter = None
+                  TestUids = None
                   AttachDebugger = false }
               )
 
@@ -306,6 +310,7 @@ let tests createServer =
                           "VSTest.XUnit.RunResults.fsproj"
                         ) ]
                   TestCaseFilter = None
+                  TestUids = None
                   AttachDebugger = false }
               )
 
@@ -363,6 +368,7 @@ let tests createServer =
                             "VSTest.XUnit.RunResults.fsproj"
                           ) ]
                     TestCaseFilter = None
+                    TestUids = None
                     AttachDebugger = true }
 
                 Async.RunSynchronously(

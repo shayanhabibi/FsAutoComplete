@@ -2841,7 +2841,12 @@ type AdaptiveState
         return testDTOs
     }
 
-  member state.RunTests (limitToProjects: FilePath list option) (testCaseFilter: string option) (shouldDebug: bool) =
+  member state.RunTests
+    (limitToProjects: FilePath list option)
+    (testCaseFilter: string option)
+    (testUids: string array option)
+    (shouldDebug: bool)
+    =
     asyncResult {
       let! vstestBinary = TestServer.VSTestWrapper.tryFindVsTestFromDotnetRoot state.Config.DotNetRoot state.RootPath
 
@@ -2858,7 +2863,15 @@ type AdaptiveState
           let specifiedProjectsSet = specifiedProjects |> List.map Path.GetFullPath |> set
           testProjects |> List.filter (_.ProjectFileName >> specifiedProjectsSet.Contains)
 
-      let testProjectBinaries = filteredTestProjects |> List.map _.TargetPath
+      let projectsRunOn kind =
+        filteredTestProjects
+        |> List.filter (fun project ->
+          TestServer.TestProject.platformFor state.Config.EnableTestingPlatform project = Some kind)
+
+      let vsTestProjects = projectsRunOn TestServer.TestPlatformKind.VSTest
+      let mtpProjects = projectsRunOn TestServer.TestPlatformKind.Mtp
+
+      let testProjectBinaries = vsTestProjects |> List.map _.TargetPath
 
       let projectsByBinaryPath =
         testProjects |> Seq.map (fun p -> p.TargetPath, p) |> Map.ofSeq
@@ -2913,6 +2926,55 @@ type AdaptiveState
 
           false
 
+      let mtpProjectsByBinaryPath =
+        mtpProjects |> Seq.map (fun p -> p.TargetPath, p) |> Map.ofSeq
+
+      /// A test is reported as it starts and again with its outcome. The first report is the test
+      /// becoming active, the second its result.
+      let mtpNodesToDTOs (nodes: TestServer.MtpWrapper.RunNode list) =
+        let ofNode select =
+          nodes
+          |> List.choose (fun (application, node) ->
+            mtpProjectsByBinaryPath.TryFind application
+            |> Option.bind (fun project -> select project node))
+
+        let isRunning (node: Partas.TestingPlatform.Client.TestNodeUpdate) =
+          node.ExecutionState = Some Partas.TestingPlatform.Client.ExecutionState.InProgress
+
+        let active =
+          ofNode (fun project node ->
+            if isRunning node then
+              Some(TestServer.TestItem.ofMtpNode project.ProjectFileName project.TargetFramework node)
+            else
+              None)
+
+        let results =
+          ofNode (fun project node ->
+            if isRunning node then
+              None
+            else
+              Some(TestServer.TestResult.ofMtpNode project.ProjectFileName project.TargetFramework node))
+
+        active, results
+
+      let onMtpRunProgress (runUpdate: TestServer.MtpWrapper.TestRunUpdate) =
+        let dto =
+          match runUpdate with
+          | TestServer.MtpWrapper.TestRunUpdate.Progress nodes ->
+            let active, results = mtpNodesToDTOs nodes
+
+            { TestLogs = [||]
+              TestResults = results |> Array.ofList
+              ActiveTests = active |> Array.ofList }
+          | TestServer.MtpWrapper.TestRunUpdate.LogMessage(level, message) ->
+            { TestLogs =
+                [| { Message = message
+                     Level = string level } |]
+              TestResults = [||]
+              ActiveTests = [||] }
+
+        Async.RunSynchronously(async { do! lspClient.NotifyTestRunUpdate(dto) }, cancellationToken = tokenSource.Token)
+
       let! testResults =
         TestServer.VSTestWrapper.runTestsAsync
           vstestBinary.FullName
@@ -2922,7 +2984,17 @@ type AdaptiveState
           testCaseFilter
           shouldDebug
 
-      let resultDtos = testResults |> tryTestResultsToDTOs
+      let uids = testUids |> Option.map List.ofArray |> Option.defaultValue []
+
+      let! mtpNodes =
+        TestServer.MtpWrapper.runTestsWithDebuggerAsync
+          onMtpRunProgress
+          (if shouldDebug then Some onAttachDebugger else None)
+          (mtpProjects |> List.map (fun project -> project.TargetPath, uids))
+
+      let resultDtos =
+        (testResults |> tryTestResultsToDTOs) @ (mtpNodes |> mtpNodesToDTOs |> snd)
+
       return resultDtos
     }
 

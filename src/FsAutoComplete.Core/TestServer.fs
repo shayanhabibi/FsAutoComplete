@@ -160,6 +160,41 @@ module TestHierarchy =
     |> List.map (fun node -> { node with ParentId = parentOf node })
 
 [<RequireQualifiedAccess>]
+type TestPlatformKind =
+  | VSTest
+  | Mtp
+
+module TestProject =
+  [<Literal>]
+  let private isTestingPlatformApplication = "IsTestingPlatformApplication"
+
+  /// MSBuild property names the workspace loader must retain for `classify` to read.
+  let requiredCustomProperties = [ isTestingPlatformApplication ]
+
+  let private hasVsTestPackages (project: Ionide.ProjInfo.Types.ProjectOptions) =
+    let indicators = set [ "Microsoft.TestPlatform.TestHost"; "Microsoft.NET.Test.Sdk" ]
+
+    project.PackageReferences
+    |> List.exists (fun pr -> Set.contains pr.Name indicators)
+
+  let private optsIntoTestingPlatform (project: Ionide.ProjInfo.Types.ProjectOptions) =
+    project.CustomProperties
+    |> List.exists (fun p ->
+      p.Name = isTestingPlatformApplication
+      && p.Value.Equals("true", StringComparison.OrdinalIgnoreCase))
+
+  /// The platform that will run a project's tests, or `None` for a project carrying none.
+  /// A project opts into Microsoft.Testing.Platform through an MSBuild property alone, so it
+  /// need not reference the VSTest packages; every other test project runs under VSTest.
+  let classify (project: Ionide.ProjInfo.Types.ProjectOptions) : TestPlatformKind option =
+    if optsIntoTestingPlatform project then
+      Some TestPlatformKind.Mtp
+    elif hasVsTestPackages project then
+      Some TestPlatformKind.VSTest
+    else
+      None
+
+[<RequireQualifiedAccess>]
 type TestOutcome =
   | Failed = 0
   | Passed = 1

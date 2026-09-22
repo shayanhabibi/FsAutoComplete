@@ -1038,7 +1038,11 @@ type AdaptiveState
       |> ignore<Task<unit>>
 
       let projectOptions =
-        loader.LoadProjects(projects |> Seq.map (fst >> UMX.untag) |> Seq.toList, [], binlogConfig)
+        loader.LoadProjects(
+          projects |> Seq.map (fst >> UMX.untag) |> Seq.toList,
+          TestServer.TestProject.requiredCustomProperties,
+          binlogConfig
+        )
         |> Seq.toList
 
       for p in projectOptions do

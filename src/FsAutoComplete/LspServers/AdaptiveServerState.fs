@@ -2748,6 +2748,14 @@ type AdaptiveState
           projects.ToValueList()
           |> List.filter (TestProjectHelpers.isRunnableTestProject state.Config.EnableTestingPlatform)
 
+        let projectsRunOn kind =
+          testProjects
+          |> List.filter (fun project ->
+            TestServer.TestProject.platformFor state.Config.EnableTestingPlatform project = Some kind)
+
+        let vsTestProjects = projectsRunOn TestServer.TestPlatformKind.VSTest
+        let mtpProjects = projectsRunOn TestServer.TestPlatformKind.Mtp
+
         let testProjectBinaries = testProjects |> List.map _.TargetPath
 
         if testProjects |> List.isEmpty then
@@ -2779,6 +2787,16 @@ type AdaptiveState
           |> List.choose (TestServer.TestItem.tryTestCaseToDTO projectLookup.TryFind)
           |> TestServer.TestHierarchy.withInferredGroupings
 
+        let mtpNodesToDTOs (nodes: TestServer.MtpWrapper.DiscoveredNode list) =
+          let projectLookup = mtpProjects |> Seq.map (fun p -> p.TargetPath, p) |> Map.ofSeq
+
+          nodes
+          |> List.choose (fun (application, node) ->
+            projectLookup.TryFind application
+            |> Option.map (fun project ->
+              TestServer.TestItem.ofMtpNode project.ProjectFileName project.TargetFramework node))
+          |> TestServer.TestHierarchy.withHierarchy
+
         let onDiscoveryProgress (update: TestServer.VSTestWrapper.TestDiscoveryUpdate) =
           let dto =
             match update with
@@ -2794,10 +2812,31 @@ type AdaptiveState
 
           lspClient.NotifyTestDiscoveryUpdate(dto) |> Async.RunSynchronously
 
-        let! testCases =
-          TestServer.VSTestWrapper.discoverTestsAsync vstestBinary.FullName onDiscoveryProgress testProjectBinaries
+        let onMtpDiscoveryProgress (update: TestServer.MtpWrapper.TestDiscoveryUpdate) =
+          let dto =
+            match update with
+            | TestServer.MtpWrapper.TestDiscoveryUpdate.Progress nodes ->
+              { Tests = nodes |> mtpNodesToDTOs |> Array.ofList
+                TestLogs = [||] }
+            | TestServer.MtpWrapper.TestDiscoveryUpdate.LogMessage(level, message) ->
+              { Tests = [||]
+                TestLogs =
+                  [| { Message = message
+                       Level = string level } |] }
 
-        let testDTOs: TestServer.TestItem list = testCases |> tryTestCasesToDTOs
+          lspClient.NotifyTestDiscoveryUpdate(dto) |> Async.RunSynchronously
+
+        let! testCases =
+          TestServer.VSTestWrapper.discoverTestsAsync
+            vstestBinary.FullName
+            onDiscoveryProgress
+            (vsTestProjects |> List.map _.TargetPath)
+
+        let! mtpNodes =
+          TestServer.MtpWrapper.discoverTestsAsync onMtpDiscoveryProgress (mtpProjects |> List.map _.TargetPath)
+
+        let testDTOs: TestServer.TestItem list =
+          (testCases |> tryTestCasesToDTOs) @ (mtpNodes |> mtpNodesToDTOs)
 
         return testDTOs
     }

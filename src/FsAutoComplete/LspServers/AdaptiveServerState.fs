@@ -2775,6 +2775,7 @@ type AdaptiveState
 
           testCases
           |> List.choose (TestServer.TestItem.tryTestCaseToDTO projectLookup.TryFind)
+          |> TestServer.TestHierarchy.withInferredGroupings
 
         let onDiscoveryProgress (update: TestServer.VSTestWrapper.TestDiscoveryUpdate) =
           let dto =

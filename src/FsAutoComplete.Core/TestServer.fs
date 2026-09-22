@@ -6,6 +6,12 @@ type TestFileRange = { StartLine: int; EndLine: int }
 
 type TestItem =
   {
+    /// Distinguishes this node from every other node reported by the server.
+    Id: string
+    /// The `Id` of the node one level up, or `None` at the root of a project.
+    ParentId: string option
+    /// A runnable test. `false` marks a grouping node.
+    IsLeaf: bool
     FullName: string
     DisplayName: string
     /// Identifies the test adapter that ran the tests
@@ -19,12 +25,20 @@ type TestItem =
   }
 
 module TestItem =
+  /// Unique within a server session: a name repeated across projects or target frameworks
+  /// yields a different id per project and framework.
+  let idOf (projFilePath: string) (targetFramework: string) (fullName: string) =
+    $"{projFilePath}|{targetFramework}|{fullName}"
+
   let ofVsTestCase
     (projFilePath: string)
     (targetFramework: string)
     (testCase: Microsoft.VisualStudio.TestPlatform.ObjectModel.TestCase)
     : TestItem =
-    { FullName = testCase.FullyQualifiedName
+    { Id = idOf projFilePath targetFramework testCase.FullyQualifiedName
+      ParentId = None
+      IsLeaf = true
+      FullName = testCase.FullyQualifiedName
       DisplayName = testCase.DisplayName
       ExecutorUri = testCase.ExecutorUri |> string
       ProjectFilePath = projFilePath
@@ -42,6 +56,63 @@ module TestItem =
     match projectLookup testCase.Source with
     | None -> None // this should never happen. We pass VsTest the list of executables to test, so all the possible sources should be known to us
     | Some project -> ofVsTestCase project.ProjectFileName project.TargetFramework testCase |> Some
+
+/// Builds the test tree for platforms that report runnable tests alone.
+module TestHierarchy =
+  open System.Text.RegularExpressions
+
+  type private Segment =
+    { Text: string
+      SeparatorBefore: string }
+
+  let private segmentRegex = Regex(@"([+\.]?)([^+\.]+)", RegexOptions.Compiled)
+
+  let private splitSegments (fullName: string) =
+    [ for m in segmentRegex.Matches(fullName) ->
+        { Text = m.Groups[2].Value
+          SeparatorBefore = m.Groups[1].Value } ]
+
+  /// The ancestor names of a fully-qualified test name, outermost first.
+  let private ancestorNames (fullName: string) =
+    splitSegments fullName
+    |> List.scan (fun path segment -> $"{path}{segment.SeparatorBefore}{segment.Text}") ""
+    |> List.filter (fun name -> name <> "" && name <> fullName)
+
+  let private groupingNode (template: TestItem) (fullName: string) =
+    { template with
+        Id = TestItem.idOf template.ProjectFilePath template.TargetFramework fullName
+        ParentId = None
+        IsLeaf = false
+        FullName = fullName
+        DisplayName = (splitSegments fullName |> List.last).Text
+        CodeFilePath = None
+        CodeLocationRange = None }
+
+  /// Returns the given tests plus a grouping node per name segment they share, each node
+  /// linked to its parent. Ids are assigned here, so a caller may leave them unset. A leaf
+  /// keeps its own identity where a grouping name collides with it.
+  let withInferredGroupings (tests: TestItem list) : TestItem list =
+    let parentOf (item: TestItem) =
+      ancestorNames item.FullName
+      |> List.tryLast
+      |> Option.map (TestItem.idOf item.ProjectFilePath item.TargetFramework)
+
+    let leaves =
+      tests
+      |> List.map (fun leaf ->
+        { leaf with
+            Id = TestItem.idOf leaf.ProjectFilePath leaf.TargetFramework leaf.FullName })
+
+    let groupings =
+      leaves
+      |> List.collect (fun leaf -> ancestorNames leaf.FullName |> List.map (groupingNode leaf))
+
+    let leafIds = leaves |> List.map _.Id |> Set.ofList
+
+    leaves @ groupings
+    |> List.filter (fun node -> node.IsLeaf || not (leafIds.Contains node.Id))
+    |> List.distinctBy _.Id
+    |> List.map (fun node -> { node with ParentId = parentOf node })
 
 [<RequireQualifiedAccess>]
 type TestOutcome =

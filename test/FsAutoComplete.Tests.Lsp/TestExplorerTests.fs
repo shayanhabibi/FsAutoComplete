@@ -113,9 +113,36 @@ let tests createServer =
               |> List.map (fun (testName, _) -> testName)
 
             let actual =
-              res |> TestDiscoveryResult.tryUnwrapTestDiscoveryResult |> List.map _.FullName
+              res
+              |> TestDiscoveryResult.tryUnwrapTestDiscoveryResult
+              |> List.filter _.IsLeaf
+              |> List.map _.FullName
 
             Expect.equal (set actual) (set expected) ""
+          }
+          testCaseAsync "it should return grouping nodes linked to their children"
+          <| async {
+            let workspaceRoot = Path.Combine(__SOURCE_DIRECTORY__, "SampleTestProjects")
+
+            let! server, _ = initializeServer workspaceRoot
+            use server = server
+
+            Workspace.build workspaceRoot
+
+            let! res = server.TestDiscoverTests()
+            let discovered = res |> TestDiscoveryResult.tryUnwrapTestDiscoveryResult
+
+            let nested =
+              discovered
+              |> List.find (fun t -> t.FullName = "Tests+Nested.Test 1" && t.IsLeaf)
+
+            let parent =
+              discovered
+              |> List.tryFind (fun t -> Some t.Id = nested.ParentId)
+              |> Option.defaultWith (fun () -> failwith "the nested test's parent was not discovered")
+
+            Expect.equal parent.FullName "Tests+Nested" "the parent is the enclosing nested type"
+            Expect.isFalse parent.IsLeaf "a grouping node is not runnable"
           } ]
       testList
         "RunTests"

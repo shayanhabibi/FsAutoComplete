@@ -9,6 +9,7 @@
     <Compile Include="TestHierarchyTests.fs" />
     <Compile Include="TestPlatformTests.fs" />
     <Compile Include="MtpMappingTests.fs" />
+    <Compile Include="MtpDiscoveryTests.fs" />
     <Compile Include="TestDiscoveryTests.fs" />
     <Compile Include="TestRunTests.fs" />
     <Compile Include="Main.fs" />
@@ -21,6 +22,7 @@
       dotnet build $(MSBuildProjectDirectory)/SampleTestProjects/VSTest.XUnit.Tests/
       dotnet build $(MSBuildProjectDirectory)/SampleTestProjects/VSTest.XUnit.RunResults/
       dotnet build $(MSBuildProjectDirectory)/SampleTestProjects/VSTest.NUnit/
+      dotnet build $(MSBuildProjectDirectory)/SampleTestProjects/Mtp.XUnit/
     </PostBuildEvent>
   </PropertyGroup>
   <Import Project="..\..\.paket\Paket.Restore.targets" />

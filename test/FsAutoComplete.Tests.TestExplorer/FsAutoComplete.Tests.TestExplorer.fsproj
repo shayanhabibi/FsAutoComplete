@@ -11,6 +11,7 @@
     <Compile Include="MtpMappingTests.fs" />
     <Compile Include="MtpDiscoveryTests.fs" />
     <Compile Include="MtpRunTests.fs" />
+    <Compile Include="MtpDebuggerTests.fs" />
     <Compile Include="TestDiscoveryTests.fs" />
     <Compile Include="TestRunTests.fs" />
     <Compile Include="Main.fs" />

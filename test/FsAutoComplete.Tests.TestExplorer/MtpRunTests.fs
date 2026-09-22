@@ -97,4 +97,11 @@ let tests =
           |> List.distinct
 
         Expect.equal names [ "Tests.Fails" ] "only the named test ran"
+      }
+
+      testCaseAsync "a uid the application does not know runs nothing"
+      <| async {
+        let! results = MtpWrapper.runTestsAsync ignore [ sampleApp, [ "deadbeef" ] ]
+
+        Expect.isEmpty results "an application runs only the tests it recognises"
       } ]

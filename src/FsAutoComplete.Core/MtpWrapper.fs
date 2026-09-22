@@ -1,5 +1,8 @@
 namespace FsAutoComplete.TestServer
 
+open System
+open System.Collections.Generic
+open System.Threading.Tasks
 open Partas.TestingPlatform.Client
 
 /// Drives Microsoft.Testing.Platform applications over the server-mode protocol. Each application
@@ -55,8 +58,36 @@ module MtpWrapper =
   /// runs every test the application has.
   type RunRequest = TestApplication * string list
 
+  type ProcessId = int
+  type DidDebuggerAttach = bool
+
+  /// Answers the server's request to have a debugger attached. Unlike VSTest, where the client
+  /// launches the test host itself to get ahead of it, the platform runs its own host and asks
+  /// the client to attach to it; the run continues once this answers.
+  let attachDebuggerHandler (onAttachDebugger: ProcessId -> DidDebuggerAttach) : ServerRequestHandler =
+    fun name parameters _cancellationToken ->
+      if name <> "client/attachDebugger" then
+        Task.FromResult None
+      else
+        let processId =
+          parameters
+          |> Option.bind (fun p ->
+            match p.TryGetValue "processId" with
+            | true, processId -> Some(Convert.ToInt32 processId)
+            | _ -> None)
+
+        let attached = processId |> Option.map onAttachDebugger |> Option.defaultValue false
+
+        Dictionary<string, obj>(dict [ "attached", box attached ]) :> IReadOnlyDictionary<string, obj>
+        |> Some
+        |> Task.FromResult
+
   /// Runs the requested tests of one application, notifying as the outcomes arrive.
-  let private runOnAsync (notify: TestRunUpdate -> unit) ((application, uids): RunRequest) =
+  let private runOnAsync
+    (notify: TestRunUpdate -> unit)
+    (onAttachDebugger: (ProcessId -> DidDebuggerAttach) option)
+    ((application, uids): RunRequest)
+    =
     async {
       let reported = ResizeArray<RunNode>()
 
@@ -72,6 +103,10 @@ module MtpWrapper =
       use _ =
         client.LogReceived.Subscribe(fun log -> notify (LogMessage(log.Level, log.Message)))
 
+      onAttachDebugger
+      |> Option.iter (fun onAttachDebugger ->
+        client.ServerRequestHandler <- Some(attachDebuggerHandler onAttachDebugger))
+
       let! _capabilities = client.InitializeAsync() |> Async.AwaitTask
 
       let! _result =
@@ -85,13 +120,22 @@ module MtpWrapper =
       return List.ofSeq reported
     }
 
-  /// Runs the requested tests of every given application.
-  let runTestsAsync (notify: TestRunUpdate -> unit) (requests: RunRequest list) : Async<RunNode list> =
+  /// Runs the requested tests of every given application. A debugger is attached only where the
+  /// application asks for one, which it does when the run was started under a debugger.
+  let runTestsWithDebuggerAsync
+    (notify: TestRunUpdate -> unit)
+    (onAttachDebugger: (ProcessId -> DidDebuggerAttach) option)
+    (requests: RunRequest list)
+    : Async<RunNode list> =
     async {
-      let! perApplication = requests |> List.map (runOnAsync notify) |> Async.Sequential
+      let! perApplication = requests |> List.map (runOnAsync notify onAttachDebugger) |> Async.Sequential
 
       return perApplication |> List.concat
     }
+
+  /// Runs the requested tests of every given application, undebugged.
+  let runTestsAsync (notify: TestRunUpdate -> unit) (requests: RunRequest list) : Async<RunNode list> =
+    runTestsWithDebuggerAsync notify None requests
 
   /// Discovers the tests of every given application.
   let discoverTestsAsync

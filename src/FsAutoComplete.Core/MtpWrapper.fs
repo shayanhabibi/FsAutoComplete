@@ -43,6 +43,56 @@ module MtpWrapper =
       return List.ofSeq discovered
     }
 
+  /// A node reported while running, paired with the application that reported it. A test is
+  /// reported more than once: once as it starts, and again with its outcome.
+  type RunNode = TestApplication * TestNodeUpdate
+
+  type TestRunUpdate =
+    | Progress of RunNode list
+    | LogMessage of ClientLogLevel * string
+
+  /// The tests of an application to run, named by the uid the platform gave them. An empty list
+  /// runs every test the application has.
+  type RunRequest = TestApplication * string list
+
+  /// Runs the requested tests of one application, notifying as the outcomes arrive.
+  let private runOnAsync (notify: TestRunUpdate -> unit) ((application, uids): RunRequest) =
+    async {
+      let reported = ResizeArray<RunNode>()
+
+      let! client = MtpClient.LaunchAsync(application, clientOptions) |> Async.AwaitTask
+      use client = client
+
+      use _ =
+        client.TestNodesUpdated.Subscribe(fun batch ->
+          let nodes = batch.Updates |> List.map (fun node -> application, node)
+          reported.AddRange nodes
+          notify (Progress nodes))
+
+      use _ =
+        client.LogReceived.Subscribe(fun log -> notify (LogMessage(log.Level, log.Message)))
+
+      let! _capabilities = client.InitializeAsync() |> Async.AwaitTask
+
+      let! _result =
+        match uids with
+        | [] -> client.RunTestsAsync()
+        | uids -> client.RunTestsAsync(uids)
+        |> Async.AwaitTask
+
+      do! client.ExitAsync() |> Async.AwaitTask
+
+      return List.ofSeq reported
+    }
+
+  /// Runs the requested tests of every given application.
+  let runTestsAsync (notify: TestRunUpdate -> unit) (requests: RunRequest list) : Async<RunNode list> =
+    async {
+      let! perApplication = requests |> List.map (runOnAsync notify) |> Async.Sequential
+
+      return perApplication |> List.concat
+    }
+
   /// Discovers the tests of every given application.
   let discoverTestsAsync
     (notify: TestDiscoveryUpdate -> unit)

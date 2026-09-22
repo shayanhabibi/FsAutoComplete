@@ -279,3 +279,175 @@ let mtpHierarchyTests =
            |> List.sort)
           [ "Flat"; "Flat.Adds" ]
           "the flat project is grouped by its names" ]
+
+[<Tests>]
+let mtpOutcomeTests =
+  testList
+    "TestOutcome.ofMtpExecutionState"
+    [ testCase "a passed test passed"
+      <| fun _ ->
+        Expect.equal (TestOutcome.ofMtpExecutionState (Some ExecutionState.Passed)) TestOutcome.Passed "the test passed"
+
+      testCase "a failed test failed"
+      <| fun _ ->
+        Expect.equal (TestOutcome.ofMtpExecutionState (Some ExecutionState.Failed)) TestOutcome.Failed "the test failed"
+
+      testCase "a skipped test was skipped"
+      <| fun _ ->
+        Expect.equal
+          (TestOutcome.ofMtpExecutionState (Some ExecutionState.Skipped))
+          TestOutcome.Skipped
+          "the test was skipped"
+
+      testCase "a test that errored failed"
+      <| fun _ ->
+        Expect.equal
+          (TestOutcome.ofMtpExecutionState (Some ExecutionState.Error))
+          TestOutcome.Failed
+          "an error stops the test from passing"
+
+      testCase "a test that timed out failed"
+      <| fun _ ->
+        Expect.equal
+          (TestOutcome.ofMtpExecutionState (Some ExecutionState.TimedOut))
+          TestOutcome.Failed
+          "a test that never finished did not pass"
+
+      testCase "a cancelled test has no outcome"
+      <| fun _ ->
+        Expect.equal
+          (TestOutcome.ofMtpExecutionState (Some ExecutionState.Canceled))
+          TestOutcome.None
+          "a cancelled test was never judged"
+
+      testCase "a test still running has no outcome"
+      <| fun _ ->
+        Expect.equal
+          (TestOutcome.ofMtpExecutionState (Some ExecutionState.InProgress))
+          TestOutcome.None
+          "a running test has not finished"
+
+      testCase "a discovered test has no outcome"
+      <| fun _ ->
+        Expect.equal
+          (TestOutcome.ofMtpExecutionState (Some ExecutionState.Discovered))
+          TestOutcome.None
+          "a discovered test has not run"
+
+      testCase "an unreported state has no outcome"
+      <| fun _ -> Expect.equal (TestOutcome.ofMtpExecutionState None) TestOutcome.None "the server judged nothing"
+
+      testCase "a state this client does not know has no outcome"
+      <| fun _ ->
+        Expect.equal
+          (TestOutcome.ofMtpExecutionState (Some(ExecutionState.Other "quarantined")))
+          TestOutcome.None
+          "an unknown state is not read as a verdict" ]
+
+[<Tests>]
+let mtpResultTests =
+  let result (n: TestNodeUpdate) = TestResult.ofMtpNode project framework n
+
+  testList
+    "TestResult.ofMtpNode"
+    [ testCase "the result names the test it belongs to"
+      <| fun _ ->
+        let passed =
+          { node "a3f9" with
+              DisplayName = Some "Tests.Adds"
+              ExecutionState = Some ExecutionState.Passed }
+
+        let actual = result passed
+
+        Expect.equal
+          actual.TestItem
+          (TestItem.ofMtpNode project framework passed)
+          "the result carries the node it reports on"
+
+      testCase "the execution state becomes the outcome"
+      <| fun _ ->
+        let actual =
+          result
+            { node "a3f9" with
+                ExecutionState = Some ExecutionState.Failed }
+
+        Expect.equal actual.Outcome TestOutcome.Failed "the server's verdict is the outcome"
+
+      testCase "a reported error becomes a message and stack trace"
+      <| fun _ ->
+        let actual =
+          result
+            { node "a3f9" with
+                ExecutionState = Some ExecutionState.Failed
+                Error =
+                  Some
+                    { Message = Some "Assert.True() failure"
+                      StackTrace = Some "at Tests.Adds()" } }
+
+        Expect.equal actual.ErrorMessage (Some "Assert.True() failure") "the failure is explained"
+        Expect.equal actual.ErrorStackTrace (Some "at Tests.Adds()") "the failure is located"
+
+      testCase "a passing test reports no error"
+      <| fun _ ->
+        let actual =
+          result
+            { node "a3f9" with
+                ExecutionState = Some ExecutionState.Passed }
+
+        Expect.isNone actual.ErrorMessage "nothing failed"
+        Expect.isNone actual.ErrorStackTrace "nothing failed"
+
+      testCase "the duration is carried over"
+      <| fun _ ->
+        let actual =
+          result
+            { node "a3f9" with
+                ExecutionState = Some ExecutionState.Passed
+                Duration = Some(System.TimeSpan.FromMilliseconds 250.0) }
+
+        Expect.equal
+          actual.Duration
+          (System.TimeSpan.FromMilliseconds 250.0)
+          "the test took the time the server measured"
+
+      testCase "an unreported duration is no time at all"
+      <| fun _ ->
+        let actual =
+          result
+            { node "a3f9" with
+                ExecutionState = Some ExecutionState.Passed }
+
+        Expect.equal actual.Duration System.TimeSpan.Zero "no time was reported"
+
+      testCase "standard output is the test's additional output"
+      <| fun _ ->
+        let actual =
+          result
+            { node "a3f9" with
+                ExecutionState = Some ExecutionState.Passed
+                StandardOutput = Some "hello" }
+
+        Expect.equal actual.AdditionalOutput (Some "hello") "what the test printed is kept"
+
+      testCase "standard error joins standard output"
+      <| fun _ ->
+        let actual =
+          result
+            { node "a3f9" with
+                ExecutionState = Some ExecutionState.Failed
+                StandardOutput = Some "hello"
+                StandardError = Some "boom" }
+
+        Expect.equal
+          actual.AdditionalOutput
+          (Some(sprintf "hello%sboom" System.Environment.NewLine))
+          "both streams are shown to the reader"
+
+      testCase "a test that printed nothing has no additional output"
+      <| fun _ ->
+        let actual =
+          result
+            { node "a3f9" with
+                ExecutionState = Some ExecutionState.Passed }
+
+        Expect.isNone actual.AdditionalOutput "the test printed nothing" ]

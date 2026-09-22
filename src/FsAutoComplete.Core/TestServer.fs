@@ -284,6 +284,18 @@ module TestOutcome =
     | VSTestOutcome.None -> TestOutcome.None
     | _ -> TestOutcome.None
 
+  /// Reads the verdict out of the state a Microsoft.Testing.Platform node reports. A state that
+  /// records progress rather than a verdict, and one this client does not know, leave the test
+  /// unjudged.
+  let ofMtpExecutionState (state: Partas.TestingPlatform.Client.ExecutionState option) =
+    match state with
+    | Some Partas.TestingPlatform.Client.ExecutionState.Passed -> TestOutcome.Passed
+    | Some Partas.TestingPlatform.Client.ExecutionState.Skipped -> TestOutcome.Skipped
+    | Some Partas.TestingPlatform.Client.ExecutionState.Failed
+    | Some Partas.TestingPlatform.Client.ExecutionState.Error
+    | Some Partas.TestingPlatform.Client.ExecutionState.TimedOut -> TestOutcome.Failed
+    | _ -> TestOutcome.None
+
 type TestResult =
   { TestItem: TestItem
     Outcome: TestOutcome
@@ -307,3 +319,25 @@ module TestResult =
         | messages -> messages |> List.map _.Text |> String.concat Environment.NewLine |> Some
       Duration = vsTestResult.Duration
       TestItem = TestItem.ofVsTestCase projFilePath targetFramework vsTestResult.TestCase }
+
+  /// Reads the outcome of a run out of a Microsoft.Testing.Platform node. The platform reports a
+  /// result as a further update to the node that was discovered, so the test it belongs to is the
+  /// node itself.
+  let ofMtpNode
+    (projFilePath: string)
+    (targetFramework: string)
+    (node: Partas.TestingPlatform.Client.TestNodeUpdate)
+    : TestResult =
+    let output =
+      [ node.StandardOutput; node.StandardError ]
+      |> List.choose id
+      |> function
+        | [] -> None
+        | streams -> streams |> String.concat Environment.NewLine |> Some
+
+    { Outcome = TestOutcome.ofMtpExecutionState node.ExecutionState
+      ErrorMessage = node.Error |> Option.bind _.Message
+      ErrorStackTrace = node.Error |> Option.bind _.StackTrace
+      AdditionalOutput = output
+      Duration = node.Duration |> Option.defaultValue TimeSpan.Zero
+      TestItem = TestItem.ofMtpNode projFilePath targetFramework node }

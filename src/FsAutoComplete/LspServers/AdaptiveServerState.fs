@@ -157,12 +157,9 @@ type FindFirstProject() =
         $"Couldn't find a corresponding project for {sourceFile}. \n Projects include {allProjects}. \nHave the projects loaded yet or have you tried restoring your project/solution?")
 
 module TestProjectHelpers =
-  let isTestProject (project: Types.ProjectOptions) =
-    let testProjectIndicators =
-      set [ "Microsoft.TestPlatform.TestHost"; "Microsoft.NET.Test.Sdk" ]
-
-    project.PackageReferences
-    |> List.exists (fun pr -> Set.contains pr.Name testProjectIndicators)
+  /// A project whose tests one of the configured platforms can discover and run.
+  let isRunnableTestProject (mtpEnabled: bool) (project: Types.ProjectOptions) =
+    TestServer.TestProject.platformFor mtpEnabled project |> Option.isSome
 
 type FileHasBeenChecked =
   { Options: LoadedProject
@@ -2748,7 +2745,8 @@ type AdaptiveState
       else
 
         let testProjects =
-          projects.ToValueList() |> List.filter TestProjectHelpers.isTestProject
+          projects.ToValueList()
+          |> List.filter (TestProjectHelpers.isRunnableTestProject state.Config.EnableTestingPlatform)
 
         let testProjectBinaries = testProjects |> List.map _.TargetPath
 
@@ -2811,7 +2809,8 @@ type AdaptiveState
       let! projects = projectOptions |> AsyncAVal.forceAsync
 
       let testProjects =
-        projects.ToValueList() |> List.filter TestProjectHelpers.isTestProject
+        projects.ToValueList()
+        |> List.filter (TestProjectHelpers.isRunnableTestProject state.Config.EnableTestingPlatform)
 
       let filteredTestProjects =
         match limitToProjects with

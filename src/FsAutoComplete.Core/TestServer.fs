@@ -194,6 +194,18 @@ module TestProject =
     else
       None
 
+  /// The platform a project's tests will actually be run on. With Microsoft.Testing.Platform
+  /// disabled, a project that opts into it falls back to VSTest where it references the VSTest
+  /// packages, and is otherwise unreachable.
+  let platformFor (mtpEnabled: bool) (project: Ionide.ProjInfo.Types.ProjectOptions) : TestPlatformKind option =
+    match classify project with
+    | Some TestPlatformKind.Mtp when not mtpEnabled ->
+      if hasVsTestPackages project then
+        Some TestPlatformKind.VSTest
+      else
+        None
+    | platform -> platform
+
 [<RequireQualifiedAccess>]
 type TestOutcome =
   | Failed = 0

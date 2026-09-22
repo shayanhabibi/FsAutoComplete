@@ -119,3 +119,57 @@ let tests =
           "IsTestingPlatformApplication"
           "classification reads a property the loader must be told to retain" ]
 
+[<Tests>]
+let platformSelectionTests =
+  let mtpDisabled = TestProject.platformFor false
+  let mtpEnabled = TestProject.platformFor true
+
+  testList
+    "TestProject.platformFor"
+    [ testCase "a plain VSTest project is unaffected by the flag"
+      <| fun _ ->
+        let project = emptyProject |> vsTestPackages
+
+        Expect.equal (mtpDisabled project) (Some TestPlatformKind.VSTest) "the flag is off"
+        Expect.equal (mtpEnabled project) (Some TestPlatformKind.VSTest) "the flag is on"
+
+      testCase "a disabled flag keeps a bridged project on VSTest"
+      <| fun _ ->
+        let actual =
+          emptyProject
+          |> vsTestPackages
+          |> withProperty "IsTestingPlatformApplication" "true"
+          |> mtpDisabled
+
+        Expect.equal actual (Some TestPlatformKind.VSTest) "the VSTest packages still run it"
+
+      testCase "a disabled flag hides a project only MTP can run"
+      <| fun _ ->
+        let actual =
+          emptyProject
+          |> withProperty "IsTestingPlatformApplication" "true"
+          |> mtpDisabled
+
+        Expect.isNone actual "no platform available can run it"
+
+      testCase "an enabled flag selects MTP for a bridged project"
+      <| fun _ ->
+        let actual =
+          emptyProject
+          |> vsTestPackages
+          |> withProperty "IsTestingPlatformApplication" "true"
+          |> mtpEnabled
+
+        Expect.equal actual (Some TestPlatformKind.Mtp) "the property wins once MTP is available"
+
+      testCase "an enabled flag selects MTP for a project only MTP can run"
+      <| fun _ ->
+        let actual =
+          emptyProject |> withProperty "IsTestingPlatformApplication" "true" |> mtpEnabled
+
+        Expect.equal actual (Some TestPlatformKind.Mtp) "a pure MTP application becomes reachable"
+
+      testCase "a project without tests stays hidden under either flag"
+      <| fun _ ->
+        Expect.isNone (mtpDisabled emptyProject) "the flag is off"
+        Expect.isNone (mtpEnabled emptyProject) "the flag is on" ]

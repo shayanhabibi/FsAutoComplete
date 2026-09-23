@@ -3,7 +3,7 @@ namespace FsAutoComplete.TestServer
 open System
 open System.Collections.Generic
 open System.Threading.Tasks
-open Partas.TestingPlatform.Client
+open FsAutoComplete.TestingPlatform.Client
 
 /// Drives Microsoft.Testing.Platform applications over the server-mode protocol. Each application
 /// is its own test runner, so there is no separate runner to locate.

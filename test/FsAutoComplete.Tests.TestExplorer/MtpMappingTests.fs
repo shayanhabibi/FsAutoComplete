@@ -3,7 +3,7 @@ module MtpMappingTests
 open Expecto
 open System.Collections.Generic
 open FsAutoComplete.TestServer
-open Partas.TestingPlatform.Client
+open FsAutoComplete.TestingPlatform.Client
 
 let private project = "/repo/Tests.fsproj"
 let private framework = "net8.0"

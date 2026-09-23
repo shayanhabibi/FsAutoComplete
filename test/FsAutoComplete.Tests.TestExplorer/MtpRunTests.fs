@@ -3,7 +3,7 @@ module MtpRunTests
 open Expecto
 open System.IO
 open FsAutoComplete.TestServer
-open Partas.TestingPlatform.Client
+open FsAutoComplete.TestingPlatform.Client
 
 let private sampleApp =
   Path.Combine(ResourceLocators.sampleProjectsRootDir, "Mtp.XUnit/bin/Debug/net8.0/Mtp.XUnit.dll")

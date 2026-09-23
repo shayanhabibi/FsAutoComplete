@@ -109,17 +109,17 @@ module TestItem =
   let ofMtpNode
     (projFilePath: string)
     (targetFramework: string)
-    (node: Partas.TestingPlatform.Client.TestNodeUpdate)
+    (node: FsAutoComplete.TestingPlatform.Client.TestNodeUpdate)
     : TestItem =
     let idOfUid = idOf projFilePath targetFramework
 
-    let range (location: Partas.TestingPlatform.Client.SourceLocation) =
+    let range (location: FsAutoComplete.TestingPlatform.Client.SourceLocation) =
       location.LineStart
       |> Option.map (fun startLine ->
         { StartLine = startLine
           EndLine = location.LineEnd |> Option.defaultValue startLine })
 
-    let isLeaf = node.NodeType <> Some Partas.TestingPlatform.Client.NodeType.Group
+    let isLeaf = node.NodeType <> Some FsAutoComplete.TestingPlatform.Client.NodeType.Group
 
     { Id = idOfUid node.Uid
       ParentId =
@@ -287,13 +287,13 @@ module TestOutcome =
   /// Reads the verdict out of the state a Microsoft.Testing.Platform node reports. A state that
   /// records progress rather than a verdict, and one this client does not know, leave the test
   /// unjudged.
-  let ofMtpExecutionState (state: Partas.TestingPlatform.Client.ExecutionState option) =
+  let ofMtpExecutionState (state: FsAutoComplete.TestingPlatform.Client.ExecutionState option) =
     match state with
-    | Some Partas.TestingPlatform.Client.ExecutionState.Passed -> TestOutcome.Passed
-    | Some Partas.TestingPlatform.Client.ExecutionState.Skipped -> TestOutcome.Skipped
-    | Some Partas.TestingPlatform.Client.ExecutionState.Failed
-    | Some Partas.TestingPlatform.Client.ExecutionState.Error
-    | Some Partas.TestingPlatform.Client.ExecutionState.TimedOut -> TestOutcome.Failed
+    | Some FsAutoComplete.TestingPlatform.Client.ExecutionState.Passed -> TestOutcome.Passed
+    | Some FsAutoComplete.TestingPlatform.Client.ExecutionState.Skipped -> TestOutcome.Skipped
+    | Some FsAutoComplete.TestingPlatform.Client.ExecutionState.Failed
+    | Some FsAutoComplete.TestingPlatform.Client.ExecutionState.Error
+    | Some FsAutoComplete.TestingPlatform.Client.ExecutionState.TimedOut -> TestOutcome.Failed
     | _ -> TestOutcome.None
 
 type TestResult =
@@ -326,7 +326,7 @@ module TestResult =
   let ofMtpNode
     (projFilePath: string)
     (targetFramework: string)
-    (node: Partas.TestingPlatform.Client.TestNodeUpdate)
+    (node: FsAutoComplete.TestingPlatform.Client.TestNodeUpdate)
     : TestResult =
     let output =
       [ node.StandardOutput; node.StandardError ]

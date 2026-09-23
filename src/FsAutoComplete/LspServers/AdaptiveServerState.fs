@@ -2938,8 +2938,8 @@ type AdaptiveState
             mtpProjectsByBinaryPath.TryFind application
             |> Option.bind (fun project -> select project node))
 
-        let isRunning (node: Partas.TestingPlatform.Client.TestNodeUpdate) =
-          node.ExecutionState = Some Partas.TestingPlatform.Client.ExecutionState.InProgress
+        let isRunning (node: FsAutoComplete.TestingPlatform.Client.TestNodeUpdate) =
+          node.ExecutionState = Some FsAutoComplete.TestingPlatform.Client.ExecutionState.InProgress
 
         let active =
           ofNode (fun project node ->

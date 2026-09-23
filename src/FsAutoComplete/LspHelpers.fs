@@ -617,10 +617,12 @@ type TestDetectedNotification =
 type TestRunRequest =
   {
     LimitToProjects: FilePath list option
+    /// VSTest filter expression. MTP tests are selected by `TestUids` instead.
     TestCaseFilter: string option
     /// Names the tests to run on Microsoft.Testing.Platform, by the uid each was discovered
-    /// under. Absent runs every test of the projects being run. A platform runs only the uids it
-    /// recognises, so a client need not say which project a uid came from.
+    /// under. Absent runs every test unless a VSTest-only filter was supplied, which is rejected
+    /// for MTP projects. An empty array runs none. A platform runs only the uids it recognises,
+    /// so a client need not say which project a uid came from.
     TestUids: string array option
     AttachDebugger: bool
   }

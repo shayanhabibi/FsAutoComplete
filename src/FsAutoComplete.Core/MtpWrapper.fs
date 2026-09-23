@@ -54,9 +54,13 @@ module MtpWrapper =
     | Progress of RunNode list
     | LogMessage of ClientLogLevel * string
 
-  /// The tests of an application to run, named by the uid the platform gave them. An empty list
-  /// runs every test the application has.
-  type RunRequest = TestApplication * string list
+  [<RequireQualifiedAccess>]
+  type TestSelection =
+    | All
+    | Uids of string list
+
+  /// Each application runs either all tests or an explicit set of discovered test uids.
+  type RunRequest = TestApplication * TestSelection
 
   type ProcessId = int
   type DidDebuggerAttach = bool
@@ -86,7 +90,7 @@ module MtpWrapper =
   let private runOnAsync
     (notify: TestRunUpdate -> unit)
     (onAttachDebugger: (ProcessId -> DidDebuggerAttach) option)
-    ((application, uids): RunRequest)
+    ((application, selection): RunRequest)
     =
     async {
       let reported = ResizeArray<RunNode>()
@@ -110,9 +114,9 @@ module MtpWrapper =
       let! _capabilities = client.InitializeAsync() |> Async.AwaitTask
 
       let! _result =
-        match uids with
-        | [] -> client.RunTestsAsync()
-        | uids -> client.RunTestsAsync(uids)
+        match selection with
+        | TestSelection.All -> client.RunTestsAsync()
+        | TestSelection.Uids uids -> client.RunTestsAsync(uids)
         |> Async.AwaitTask
 
       do! client.ExitAsync() |> Async.AwaitTask
@@ -128,7 +132,13 @@ module MtpWrapper =
     (requests: RunRequest list)
     : Async<RunNode list> =
     async {
-      let! perApplication = requests |> List.map (runOnAsync notify onAttachDebugger) |> Async.Sequential
+      // The platform treats an empty uid collection as "run all". An explicit empty
+      // selection must therefore never be sent to an application.
+      let! perApplication =
+        requests
+        |> List.filter (fun (_, selection) -> selection <> TestSelection.Uids [])
+        |> List.map (runOnAsync notify onAttachDebugger)
+        |> Async.Sequential
 
       return perApplication |> List.concat
     }

@@ -10,7 +10,7 @@ let private sampleApp =
 
 let private nameOf (node: TestNodeUpdate) = node.DisplayName |> Option.defaultValue node.Uid
 
-let private runAll () = MtpWrapper.runTestsAsync ignore [ sampleApp, [] ]
+let private runAll () = MtpWrapper.runTestsAsync ignore [ sampleApp, MtpWrapper.TestSelection.All ]
 
 let private byName name (results: MtpWrapper.RunNode list) =
   results |> List.find (fun (_, node) -> nameOf node = name) |> snd
@@ -73,7 +73,7 @@ let tests =
             (function
             | MtpWrapper.TestRunUpdate.Progress nodes -> seen.AddRange nodes
             | MtpWrapper.TestRunUpdate.LogMessage _ -> ())
-            [ sampleApp, [] ]
+            [ sampleApp, MtpWrapper.TestSelection.All ]
 
         Expect.equal (List.ofSeq seen) results "progress reports the same nodes as the result"
       }
@@ -88,7 +88,7 @@ let tests =
           |> snd
           |> _.Uid
 
-        let! results = MtpWrapper.runTestsAsync ignore [ sampleApp, [ uid ] ]
+        let! results = MtpWrapper.runTestsAsync ignore [ sampleApp, MtpWrapper.TestSelection.Uids [ uid ] ]
 
         let names =
           results
@@ -101,7 +101,13 @@ let tests =
 
       testCaseAsync "a uid the application does not know runs nothing"
       <| async {
-        let! results = MtpWrapper.runTestsAsync ignore [ sampleApp, [ "deadbeef" ] ]
+        let! results = MtpWrapper.runTestsAsync ignore [ sampleApp, MtpWrapper.TestSelection.Uids [ "deadbeef" ] ]
 
         Expect.isEmpty results "an application runs only the tests it recognises"
+      }
+
+      testCaseAsync "an explicitly empty uid selection runs no tests"
+      <| async {
+        let! results = MtpWrapper.runTestsAsync ignore [ sampleApp, MtpWrapper.TestSelection.Uids [] ]
+        Expect.isEmpty results "an empty selection does not turn into a request to run all tests"
       } ]

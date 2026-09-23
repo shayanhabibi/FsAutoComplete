@@ -249,6 +249,98 @@ let tests createServer =
               |> List.ofSeq
 
             Expect.isEmpty vsTestComplaints "VSTest is not asked to run a workspace that has no VSTest projects"
+          }
+
+          testCaseAsync "an empty uid selection must not run every testing platform test"
+          <| async {
+            let workspaceRoot = Path.Combine(__SOURCE_DIRECTORY__, "MtpSampleProjects")
+
+            let! server, event =
+              serverInitialize
+                workspaceRoot
+                { defaultConfigDto with
+                    EnableTestingPlatform = Some true }
+                createServer
+
+            do! waitForWorkspaceFinishedParsing event
+            use server = server
+            Workspace.build workspaceRoot
+
+            let runRequest: TestRunRequest =
+              { LimitToProjects = None
+                TestCaseFilter = None
+                TestUids = Some [||]
+                AttachDebugger = false }
+
+            let! res = server.TestRunTests(runRequest)
+            Expect.isEmpty (TestRunResult.tryUnwrapTestRunResult res) "no tests were selected"
+          }
+
+          testCaseAsync "a discovered uid runs only its selected testing platform test"
+          <| async {
+            let workspaceRoot = Path.Combine(__SOURCE_DIRECTORY__, "MtpSampleProjects")
+
+            let! server, event =
+              serverInitialize
+                workspaceRoot
+                { defaultConfigDto with
+                    EnableTestingPlatform = Some true }
+                createServer
+
+            do! waitForWorkspaceFinishedParsing event
+            use server = server
+            Workspace.build workspaceRoot
+
+            let! discovery = server.TestDiscoverTests()
+
+            let selectedUid =
+              discovery
+              |> TestDiscoveryResult.tryUnwrapTestDiscoveryResult
+              |> List.find (fun test -> test.IsLeaf && test.FullName = "Tests.My test")
+              |> _.PlatformUid
+              |> Option.get
+
+            let runRequest: TestRunRequest =
+              { LimitToProjects = None
+                TestCaseFilter = None
+                TestUids = Some [| selectedUid |]
+                AttachDebugger = false }
+
+            let! res = server.TestRunTests(runRequest)
+
+            let actual =
+              TestRunResult.tryUnwrapTestRunResult res
+              |> List.map (fun result -> result.TestItem.FullName, result.Outcome)
+
+            Expect.equal
+              actual
+              [ "Tests.My test", FsAutoComplete.TestServer.TestOutcome.Passed ]
+              "only the selected test ran"
+          }
+
+          testCaseAsync "a VSTest-only filter must not run every testing platform test"
+          <| async {
+            let workspaceRoot = Path.Combine(__SOURCE_DIRECTORY__, "MtpSampleProjects")
+
+            let! server, event =
+              serverInitialize
+                workspaceRoot
+                { defaultConfigDto with
+                    EnableTestingPlatform = Some true }
+                createServer
+
+            do! waitForWorkspaceFinishedParsing event
+            use server = server
+            Workspace.build workspaceRoot
+
+            let runRequest: TestRunRequest =
+              { LimitToProjects = None
+                TestCaseFilter = Some "FullyQualifiedName~My test"
+                TestUids = None
+                AttachDebugger = false }
+
+            let! res = server.TestRunTests(runRequest)
+            Expect.isError res "a VSTest expression cannot silently select all MTP tests"
           } ]
       testList
         "RunTests"

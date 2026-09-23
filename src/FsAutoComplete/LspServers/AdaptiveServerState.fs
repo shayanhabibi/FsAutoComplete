@@ -2871,6 +2871,11 @@ type AdaptiveState
       let vsTestProjects = projectsRunOn TestServer.TestPlatformKind.VSTest
       let mtpProjects = projectsRunOn TestServer.TestPlatformKind.Mtp
 
+      if not (List.isEmpty mtpProjects) && testCaseFilter.IsSome && testUids.IsNone then
+        return!
+          Error
+            "TestCaseFilter uses VSTest syntax and cannot select Microsoft.Testing.Platform tests. Discover the tests and pass their TestUids."
+
       let testProjectBinaries = vsTestProjects |> List.map _.TargetPath
 
       let projectsByBinaryPath =
@@ -2989,13 +2994,16 @@ type AdaptiveState
             testCaseFilter
             shouldDebug
 
-      let uids = testUids |> Option.map List.ofArray |> Option.defaultValue []
+      let mtpSelection =
+        testUids
+        |> Option.map (List.ofArray >> TestServer.MtpWrapper.TestSelection.Uids)
+        |> Option.defaultValue TestServer.MtpWrapper.TestSelection.All
 
       let! mtpNodes =
         TestServer.MtpWrapper.runTestsWithDebuggerAsync
           onMtpRunProgress
           (if shouldDebug then Some onAttachDebugger else None)
-          (mtpProjects |> List.map (fun project -> project.TargetPath, uids))
+          (mtpProjects |> List.map (fun project -> project.TargetPath, mtpSelection))
 
       let resultDtos =
         (testResults |> tryTestResultsToDTOs) @ (mtpNodes |> mtpNodesToDTOs |> snd)

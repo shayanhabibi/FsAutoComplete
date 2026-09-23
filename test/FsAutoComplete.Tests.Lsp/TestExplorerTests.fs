@@ -162,6 +162,18 @@ let tests createServer =
 
             Workspace.build workspaceRoot
 
+            let logs = System.Collections.Concurrent.ConcurrentBag<string>()
+
+            use _ =
+              event.Subscribe(fun (msgType: string, data: obj) ->
+                if msgType = "test/testDiscoveryUpdate" then
+                  let progress: TestDiscoveryUpdateNotification =
+                    data :?> PlainNotification
+                    |> _.Content
+                    |> FsAutoComplete.JsonSerializer.readJson
+
+                  progress.TestLogs |> Array.iter (fun log -> logs.Add log.Message))
+
             let! res = server.TestDiscoverTests()
 
             let actual =
@@ -171,6 +183,11 @@ let tests createServer =
               |> List.map _.FullName
 
             Expect.contains actual "Tests.My test" "the tests of a testing platform project are discovered"
+
+            let vsTestComplaints =
+              logs |> Seq.filter (fun log -> log.Contains "Parameter 'sources'") |> List.ofSeq
+
+            Expect.isEmpty vsTestComplaints "VSTest is not asked to discover from an empty source list"
           }
 
           testCaseAsync "it should run the tests of a testing platform project"

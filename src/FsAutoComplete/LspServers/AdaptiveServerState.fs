@@ -2827,10 +2827,13 @@ type AdaptiveState
           lspClient.NotifyTestDiscoveryUpdate(dto) |> Async.RunSynchronously
 
         let! testCases =
-          TestServer.VSTestWrapper.discoverTestsAsync
-            vstestBinary.FullName
-            onDiscoveryProgress
-            (vsTestProjects |> List.map _.TargetPath)
+          if List.isEmpty vsTestProjects then
+            async { return [] }
+          else
+            TestServer.VSTestWrapper.discoverTestsAsync
+              vstestBinary.FullName
+              onDiscoveryProgress
+              (vsTestProjects |> List.map _.TargetPath)
 
         let! mtpNodes =
           TestServer.MtpWrapper.discoverTestsAsync onMtpDiscoveryProgress (mtpProjects |> List.map _.TargetPath)

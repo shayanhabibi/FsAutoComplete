@@ -82,7 +82,7 @@ module MtpWrapper =
 
         let attached = processId |> Option.map onAttachDebugger |> Option.defaultValue false
 
-        Dictionary<string, obj>(dict [ "attached", box attached ]) :> IReadOnlyDictionary<string, obj>
+        Dictionary<string, obj>(dict [ "success", box attached ]) :> IReadOnlyDictionary<string, obj>
         |> Some
         |> Task.FromResult
 
@@ -107,11 +107,30 @@ module MtpWrapper =
       use _ =
         client.LogReceived.Subscribe(fun log -> notify (LogMessage(log.Level, log.Message)))
 
-      onAttachDebugger
-      |> Option.iter (fun onAttachDebugger ->
-        client.ServerRequestHandler <- Some(attachDebuggerHandler onAttachDebugger))
+      let attachOnce =
+        onAttachDebugger
+        |> Option.map (fun attach ->
+          let mutable attachedProcess = None
+
+          fun processId ->
+            if attachedProcess = Some processId then
+              true
+            else
+              let didAttach = attach processId
+
+              if didAttach then
+                attachedProcess <- Some processId
+
+              didAttach)
+
+      attachOnce
+      |> Option.iter (fun attach -> client.ServerRequestHandler <- Some(attachDebuggerHandler attach))
 
       let! _capabilities = client.InitializeAsync() |> Async.AwaitTask
+
+      // Protocol 1.0 reserves attachDebugger but its server never sends that request.
+      // The launched application is the test host, so attach to its pid before execution.
+      attachOnce |> Option.iter (fun attach -> attach client.ProcessId |> ignore)
 
       let! _result =
         match selection with

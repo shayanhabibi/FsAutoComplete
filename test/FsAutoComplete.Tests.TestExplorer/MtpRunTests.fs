@@ -78,6 +78,24 @@ let tests =
         Expect.equal (List.ofSeq seen) results "progress reports the same nodes as the result"
       }
 
+      testCaseAsync "requests debugger attachment before running the test application"
+      <| async {
+        let mutable processId = None
+
+        let! results =
+          MtpWrapper.runTestsWithDebuggerAsync
+            ignore
+            (Some(fun pid ->
+              use testProcess = System.Diagnostics.Process.GetProcessById(pid)
+              Expect.isFalse testProcess.HasExited "the named process is alive before tests execute"
+              processId <- Some pid
+              false))
+            [ sampleApp, MtpWrapper.TestSelection.All ]
+
+        Expect.isSome processId "the debugger was asked to attach to the test application"
+        Expect.isNonEmpty results "the run still completes when attachment is declined"
+      }
+
       testCaseAsync "runs only the tests it is asked to run"
       <| async {
         let! discovered = MtpWrapper.discoverTestsAsync ignore [ sampleApp ]

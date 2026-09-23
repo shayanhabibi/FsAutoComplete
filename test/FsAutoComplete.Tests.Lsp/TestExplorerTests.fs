@@ -207,6 +207,53 @@ let tests createServer =
               "a testing platform project reports its outcomes"
           }
 
+          testCaseAsync "a debug run requests attachment to the testing platform process"
+          <| async {
+            let workspaceRoot = Path.Combine(__SOURCE_DIRECTORY__, "MtpSampleProjects")
+
+            let! server, event =
+              serverInitialize
+                workspaceRoot
+                { defaultConfigDto with
+                    EnableTestingPlatform = Some true }
+                createServer
+
+            do! waitForWorkspaceFinishedParsing event
+            use server = server
+            Workspace.build workspaceRoot
+
+            use tokenSource = new CancellationTokenSource()
+            let mutable processId = None
+            use! _onCancel = Async.OnCancel(fun () -> tokenSource.Cancel())
+
+            use _ =
+              event.Subscribe(fun (msgType: string, data: obj) ->
+                if msgType = "test/processWaitingForDebugger" then
+                  processId <-
+                    data :?> PlainNotification
+                    |> _.Content
+                    |> FsAutoComplete.JsonSerializer.readJson<int>
+                    |> Some
+
+                  tokenSource.Cancel())
+
+            Expect.throwsT<System.OperationCanceledException>
+              (fun () ->
+                Async.RunSynchronously(
+                  server.TestRunTests(
+                    { LimitToProjects = None
+                      TestCaseFilter = None
+                      TestUids = None
+                      AttachDebugger = true }
+                  )
+                  |> Async.Ignore,
+                  cancellationToken = tokenSource.Token
+                ))
+              "the test run waits for the debugger response"
+
+            Expect.isSome processId "the client was asked to attach to the testing platform application"
+          }
+
           testCaseAsync "it should not run VSTest when a workspace has only testing platform projects"
           <| async {
             let workspaceRoot = Path.Combine(__SOURCE_DIRECTORY__, "MtpSampleProjects")

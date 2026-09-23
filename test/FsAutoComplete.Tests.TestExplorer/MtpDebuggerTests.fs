@@ -22,7 +22,7 @@ let private attachRequest processId = request "client/attachDebugger" [ "process
 let private answer (result: IReadOnlyDictionary<string, obj> option) =
   result
   |> Option.bind (fun r ->
-    match r.TryGetValue "attached" with
+    match r.TryGetValue "success" with
     | true, attached -> Some attached
     | _ -> None)
 

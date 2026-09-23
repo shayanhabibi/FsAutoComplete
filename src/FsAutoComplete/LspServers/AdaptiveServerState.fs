@@ -2975,14 +2975,19 @@ type AdaptiveState
 
         Async.RunSynchronously(async { do! lspClient.NotifyTestRunUpdate(dto) }, cancellationToken = tokenSource.Token)
 
+      // VsTest fails the run outright when it is handed no sources, so a run of only testing
+      // platform projects must not reach it.
       let! testResults =
-        TestServer.VSTestWrapper.runTestsAsync
-          vstestBinary.FullName
-          onTestRunProgress
-          onAttachDebugger
-          testProjectBinaries
-          testCaseFilter
-          shouldDebug
+        if testProjectBinaries |> List.isEmpty then
+          async { return [] }
+        else
+          TestServer.VSTestWrapper.runTestsAsync
+            vstestBinary.FullName
+            onTestRunProgress
+            onAttachDebugger
+            testProjectBinaries
+            testCaseFilter
+            shouldDebug
 
       let uids = testUids |> Option.map List.ofArray |> Option.defaultValue []
 

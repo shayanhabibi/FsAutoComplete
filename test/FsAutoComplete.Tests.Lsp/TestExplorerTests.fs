@@ -171,6 +171,84 @@ let tests createServer =
               |> List.map _.FullName
 
             Expect.contains actual "Tests.My test" "the tests of a testing platform project are discovered"
+          }
+
+          testCaseAsync "it should run the tests of a testing platform project"
+          <| async {
+            let workspaceRoot = Path.Combine(__SOURCE_DIRECTORY__, "MtpSampleProjects")
+
+            let! server, event =
+              serverInitialize
+                workspaceRoot
+                { defaultConfigDto with
+                    EnableTestingPlatform = Some true }
+                createServer
+
+            do! waitForWorkspaceFinishedParsing event
+            use server = server
+
+            Workspace.build workspaceRoot
+
+            let runRequest: TestRunRequest =
+              { LimitToProjects = None
+                TestCaseFilter = None
+                TestUids = None
+                AttachDebugger = false }
+
+            let! res = server.TestRunTests(runRequest)
+
+            let actual =
+              TestRunResult.tryUnwrapTestRunResult res
+              |> List.map (fun tr -> tr.TestItem.FullName, tr.Outcome)
+
+            Expect.contains
+              actual
+              ("Tests.My test", FsAutoComplete.TestServer.TestOutcome.Passed)
+              "a testing platform project reports its outcomes"
+          }
+
+          testCaseAsync "it should not run VSTest when a workspace has only testing platform projects"
+          <| async {
+            let workspaceRoot = Path.Combine(__SOURCE_DIRECTORY__, "MtpSampleProjects")
+
+            let! server, event =
+              serverInitialize
+                workspaceRoot
+                { defaultConfigDto with
+                    EnableTestingPlatform = Some true }
+                createServer
+
+            do! waitForWorkspaceFinishedParsing event
+            use server = server
+
+            Workspace.build workspaceRoot
+
+            let logs = System.Collections.Concurrent.ConcurrentBag<string>()
+
+            use _ =
+              event.Subscribe(fun (msgType: string, data: obj) ->
+                if msgType = "test/testRunProgressUpdate" then
+                  let progress: TestRunProgress =
+                    data :?> PlainNotification
+                    |> _.Content
+                    |> FsAutoComplete.JsonSerializer.readJson
+
+                  progress.TestLogs |> Array.iter (fun log -> logs.Add log.Message))
+
+            let runRequest: TestRunRequest =
+              { LimitToProjects = None
+                TestCaseFilter = None
+                TestUids = None
+                AttachDebugger = false }
+
+            let! _ = server.TestRunTests(runRequest)
+
+            let vsTestComplaints =
+              logs
+              |> Seq.filter (fun log -> log.Contains "Value cannot be null")
+              |> List.ofSeq
+
+            Expect.isEmpty vsTestComplaints "VSTest is not asked to run a workspace that has no VSTest projects"
           } ]
       testList
         "RunTests"

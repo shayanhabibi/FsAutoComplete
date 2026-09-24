@@ -191,6 +191,40 @@ let mtpNodeTests =
           "name breakdown by adapter does not apply to a platform that reports its own tree" ]
 
 [<Tests>]
+let idScopeTests =
+  let vsTestCase fullName =
+    Microsoft.VisualStudio.TestPlatform.ObjectModel.TestCase(
+      fullName,
+      System.Uri "executor://xunit/VsTestRunner2/netcoreapp",
+      "/repo/bin/Tests.dll",
+      DisplayName = fullName
+    )
+
+  let distinctIds (ids: string list) = ids |> List.distinct |> List.length
+
+  testList
+    "TestItem ids"
+    [ testCase "one platform uid in two projects or frameworks names different tests"
+      <| fun _ ->
+        let ids =
+          [ TestItem.ofMtpNode project framework (node "a3f9")
+            TestItem.ofMtpNode "/repo/Other.fsproj" framework (node "a3f9")
+            TestItem.ofMtpNode project "net9.0" (node "a3f9") ]
+          |> List.map _.Id
+
+        Expect.equal (distinctIds ids) 3 "each project and framework has its own id"
+
+      testCase "one VSTest name in two projects or frameworks names different tests"
+      <| fun _ ->
+        let ids =
+          [ TestItem.ofVsTestCase project framework (vsTestCase "Tests.My test")
+            TestItem.ofVsTestCase "/repo/Other.fsproj" framework (vsTestCase "Tests.My test")
+            TestItem.ofVsTestCase project "net9.0" (vsTestCase "Tests.My test") ]
+          |> List.map _.Id
+
+        Expect.equal (distinctIds ids) 3 "each project and framework has its own id" ]
+
+[<Tests>]
 let mtpHierarchyTests =
   let leaf id fullName parentId : TestItem =
     { Id = id

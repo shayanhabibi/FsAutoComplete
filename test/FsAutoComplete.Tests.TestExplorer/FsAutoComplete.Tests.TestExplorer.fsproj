@@ -12,6 +12,8 @@
     <Compile Include="MtpDiscoveryTests.fs" />
     <Compile Include="MtpRunTests.fs" />
     <Compile Include="MtpDebuggerTests.fs" />
+    <Compile Include="MtpTaskBoundaryTests.fs" />
+    <Compile Include="MtpShutdownTests.fs" />
     <Compile Include="TestDiscoveryTests.fs" />
     <Compile Include="TestRunTests.fs" />
     <Compile Include="Main.fs" />

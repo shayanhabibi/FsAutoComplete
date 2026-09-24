@@ -165,6 +165,39 @@ let tests =
             File.Delete(path + ".started"))
       }
 
+      testCaseAsync "a failing debugger attachment surfaces its exception and stops the host"
+      <| async {
+        let failure = InvalidOperationException "attach failed"
+        let mutable host = None
+
+        try
+          let! outcome =
+            MtpWrapper.runTestsWithDebuggerAsync
+              ignore
+              (Some(fun pid ->
+                // The host sits idle in server mode after this throws, so only teardown ends it.
+                host <- Some(Process.GetProcessById pid)
+                raise failure))
+              [ sampleApp, MtpWrapper.TestSelection.All ]
+            |> Async.Catch
+
+          match outcome with
+          | Choice2Of2 error ->
+            Expect.isTrue (obj.ReferenceEquals(error, failure)) $"not the original exception: {error}"
+          | Choice1Of2 results -> failtest $"expected the attach failure, got {results}"
+
+          Expect.isSome host "the debugger was asked to attach"
+          Expect.isTrue (host.Value.WaitForExit 5000) "the failed run terminates the test host"
+        finally
+          host
+          |> Option.iter (fun testProcess ->
+            if not testProcess.HasExited then
+              testProcess.Kill(true)
+              testProcess.WaitForExit(5000) |> ignore
+
+            testProcess.Dispose())
+      }
+
       testCaseAsync "runs only the tests it is asked to run"
       <| async {
         let! discovered = MtpWrapper.discoverTestsAsync ignore [ sampleApp ]

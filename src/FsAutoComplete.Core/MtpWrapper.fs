@@ -3,6 +3,7 @@ namespace FsAutoComplete.TestServer
 open System
 open System.Collections.Generic
 open System.Runtime.ExceptionServices
+open System.Threading
 open System.Threading.Tasks
 open FsAutoComplete.TestingPlatform.Client
 
@@ -23,68 +24,103 @@ module MtpWrapper =
     { MtpClientOptions.Default with
         ClientName = "FsAutoComplete" }
 
-  // AwaitTask delivers task cancellation to the exception continuation. Preserve request
-  // cancellation as async cancellation after the client's resources have been disposed.
-  let private withRequestCancellation operation =
+  /// Starts a task under the async's cancellation token and reports its outcome only once it has
+  /// finished: its result, its exception unwrapped, or request cancellation as async cancellation.
+  /// Async.AwaitTask checks for cancellation after the task it is given is already running, so a
+  /// racing cancellation is reported while that task carries on, and anything it produces is lost.
+  /// Cancellation is therefore reported late on purpose: only once the task has noticed it and
+  /// released everything it holds, which for a test host includes tearing the host down.
+  /// Internal so the tests can reach it.
+  let internal startTaskAsync (start: CancellationToken -> Task<'T>) : Async<'T> =
     async {
       let! cancellationToken = Async.CancellationToken
 
-      try
-        return! operation
-      with :? OperationCanceledException as error when cancellationToken.IsCancellationRequested ->
-        return! Async.FromContinuations(fun (_, _, cancelled) -> cancelled error)
-    }
-
-  // Shutdown is deliberately best-effort here. The operation result (including cancellation or
-  // an exception) must remain the result observed by the caller if cleanup also fails.
-  let private shutdownIgnoringErrors (client: MtpClient) =
-    async {
-      try
-        do! client.ShutdownAsync() |> Async.AwaitTask
-      with _ -> ()
+      return!
+        Async.FromContinuations(fun (ok, error, cancelled) ->
+          (start cancellationToken)
+            .ContinueWith(
+              (fun (completed: Task<'T>) ->
+                if completed.IsCompletedSuccessfully then
+                  ok completed.Result
+                else
+                  try
+                    completed.GetAwaiter().GetResult() |> ignore
+                  with
+                  | :? OperationCanceledException as failure when cancellationToken.IsCancellationRequested ->
+                    cancelled failure
+                  | failure -> error failure),
+              TaskScheduler.Default
+            )
+          |> ignore)
     }
 
   let private rethrow (error: exn) : 'a =
     ExceptionDispatchInfo.Capture(error).Throw()
     Unchecked.defaultof<'a>
 
+  /// Acquires a resource and owns it from acquisition to disposal, all within one task, so no
+  /// cancellation can separate the two. The resource is released, then disposed, before the
+  /// outcome of <c>work</c> is reported. Release is best-effort, so that outcome stays the one
+  /// observed; it runs first so that disposal finds nothing left to wait for.
+  /// Internal so the tests can reach it.
+  let internal ownedAsync<'R, 'T when 'R :> IDisposable>
+    (acquire: CancellationToken -> Task<'R>)
+    (release: 'R -> Task)
+    (work: CancellationToken -> 'R -> Task<'T>)
+    : Async<'T> =
+    startTaskAsync (fun cancellationToken ->
+      task {
+        use! resource = acquire cancellationToken
+
+        let! outcome =
+          task {
+            try
+              let! result = work cancellationToken resource
+              return Choice1Of2 result
+            with error ->
+              return Choice2Of2 error
+          }
+
+        try
+          do! release resource
+        with _ ->
+          ()
+
+        match outcome with
+        | Choice1Of2 result -> return result
+        | Choice2Of2 error -> return rethrow error
+      })
+
+  /// Launches <c>application</c> and owns its client until it is shut down. Shutdown goes through
+  /// <c>ShutdownAsync</c>, which does not block a thread while the host is torn down, as a
+  /// synchronous <c>Dispose</c> would.
+  let private withClientAsync (application: TestApplication) (work: CancellationToken -> MtpClient -> Task<'T>) =
+    ownedAsync
+      (fun cancellationToken -> MtpClient.LaunchAsync(application, clientOptions, cancellationToken))
+      (fun client -> client.ShutdownAsync())
+      work
+
   /// Collects every node an application reports, notifying as the batches arrive.
   let private discoverFromAsync (notify: TestDiscoveryUpdate -> unit) (application: TestApplication) =
-    async {
-      let! cancellationToken = Async.CancellationToken
-      let discovered = ResizeArray<DiscoveredNode>()
+    withClientAsync application (fun cancellationToken client ->
+      task {
+        let discovered = ResizeArray<DiscoveredNode>()
 
-      let! client =
-        MtpClient.LaunchAsync(application, clientOptions, cancellationToken)
-        |> Async.AwaitTask
+        use _ =
+          client.TestNodesUpdated.Subscribe(fun batch ->
+            let nodes = batch.Updates |> List.map (fun node -> application, node)
+            discovered.AddRange nodes
+            notify (Progress nodes))
 
-      use client = client
+        use _ =
+          client.LogReceived.Subscribe(fun log -> notify (LogMessage(log.Level, log.Message)))
 
-      let! result =
-        Async.Catch(async {
-          use _ =
-            client.TestNodesUpdated.Subscribe(fun batch ->
-              let nodes = batch.Updates |> List.map (fun node -> application, node)
-              discovered.AddRange nodes
-              notify (Progress nodes))
+        let! _capabilities = client.InitializeAsync(cancellationToken)
+        do! client.DiscoverTestsAsync(cancellationToken)
+        do! client.ExitAsync(cancellationToken)
 
-          use _ =
-            client.LogReceived.Subscribe(fun log -> notify (LogMessage(log.Level, log.Message)))
-
-          let! _capabilities = client.InitializeAsync(cancellationToken) |> Async.AwaitTask
-          do! client.DiscoverTestsAsync(cancellationToken) |> Async.AwaitTask
-          do! client.ExitAsync(cancellationToken) |> Async.AwaitTask
-
-          return List.ofSeq discovered
-        })
-
-      do! shutdownIgnoringErrors client
-
-      match result with
-      | Choice1Of2 nodes -> return nodes
-      | Choice2Of2 error -> return rethrow error
-    }
-    |> withRequestCancellation
+        return List.ofSeq discovered
+      })
 
   /// A node reported while running, paired with the application that reported it. A test is
   /// reported more than once: once as it starts, and again with its outcome.
@@ -132,70 +168,53 @@ module MtpWrapper =
     (onAttachDebugger: (ProcessId -> DidDebuggerAttach) option)
     ((application, selection): RunRequest)
     =
-    async {
-      let! cancellationToken = Async.CancellationToken
-      let reported = ResizeArray<RunNode>()
+    withClientAsync application (fun cancellationToken client ->
+      task {
+        let reported = ResizeArray<RunNode>()
 
-      let! client =
-        MtpClient.LaunchAsync(application, clientOptions, cancellationToken)
-        |> Async.AwaitTask
+        use _ =
+          client.TestNodesUpdated.Subscribe(fun batch ->
+            let nodes = batch.Updates |> List.map (fun node -> application, node)
+            reported.AddRange nodes
+            notify (Progress nodes))
 
-      use client = client
+        use _ =
+          client.LogReceived.Subscribe(fun log -> notify (LogMessage(log.Level, log.Message)))
 
-      let! result =
-        Async.Catch(async {
-          use _ =
-            client.TestNodesUpdated.Subscribe(fun batch ->
-              let nodes = batch.Updates |> List.map (fun node -> application, node)
-              reported.AddRange nodes
-              notify (Progress nodes))
+        let attachOnce =
+          onAttachDebugger
+          |> Option.map (fun attach ->
+            let mutable attachedProcess = None
 
-          use _ =
-            client.LogReceived.Subscribe(fun log -> notify (LogMessage(log.Level, log.Message)))
+            fun processId ->
+              if attachedProcess = Some processId then
+                true
+              else
+                let didAttach = attach processId
 
-          let attachOnce =
-            onAttachDebugger
-            |> Option.map (fun attach ->
-              let mutable attachedProcess = None
+                if didAttach then
+                  attachedProcess <- Some processId
 
-              fun processId ->
-                if attachedProcess = Some processId then
-                  true
-                else
-                  let didAttach = attach processId
+                didAttach)
 
-                  if didAttach then
-                    attachedProcess <- Some processId
+        attachOnce
+        |> Option.iter (fun attach -> client.ServerRequestHandler <- Some(attachDebuggerHandler attach))
 
-                  didAttach)
+        let! _capabilities = client.InitializeAsync(cancellationToken)
 
-          attachOnce
-          |> Option.iter (fun attach -> client.ServerRequestHandler <- Some(attachDebuggerHandler attach))
+        // Protocol 1.0 reserves attachDebugger but its server never sends that request.
+        // The launched application is the test host, so attach to its pid before execution.
+        attachOnce |> Option.iter (fun attach -> attach client.ProcessId |> ignore)
 
-          let! _capabilities = client.InitializeAsync(cancellationToken) |> Async.AwaitTask
+        let! _result =
+          match selection with
+          | TestSelection.All -> client.RunTestsAsync(cancellationToken)
+          | TestSelection.Uids uids -> client.RunTestsAsync(uids, cancellationToken)
 
-          // Protocol 1.0 reserves attachDebugger but its server never sends that request.
-          // The launched application is the test host, so attach to its pid before execution.
-          attachOnce |> Option.iter (fun attach -> attach client.ProcessId |> ignore)
+        do! client.ExitAsync(cancellationToken)
 
-          let! _result =
-            match selection with
-            | TestSelection.All -> client.RunTestsAsync(cancellationToken)
-            | TestSelection.Uids uids -> client.RunTestsAsync(uids, cancellationToken)
-            |> Async.AwaitTask
-
-          do! client.ExitAsync(cancellationToken) |> Async.AwaitTask
-
-          return List.ofSeq reported
-        })
-
-      do! shutdownIgnoringErrors client
-
-      match result with
-      | Choice1Of2 nodes -> return nodes
-      | Choice2Of2 error -> return rethrow error
-    }
-    |> withRequestCancellation
+        return List.ofSeq reported
+      })
 
   /// Runs the requested tests of every given application. A debugger is attached only where the
   /// application asks for one, which it does when the run was started under a debugger.

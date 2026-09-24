@@ -69,6 +69,66 @@ module Workspace =
         buildResult.ExitCode
         $"Workspace build failed with: {buildResult.StdErr} \nProject: {project.FullName}"
 
+/// A workspace whose solution holds a VSTest project and a Microsoft.Testing.Platform project,
+/// reusing the fixtures the single-platform tests run against.
+module MixedWorkspace =
+  let root = Path.Combine(__SOURCE_DIRECTORY__, "MixedPlatformSampleProjects")
+
+  let vsTestProject =
+    Path.Combine(__SOURCE_DIRECTORY__, "SampleTestProjects", "VSTest.XUnit.Tests", "VSTest.XUnit.Tests.fsproj")
+
+  let mtpProject =
+    Path.Combine(__SOURCE_DIRECTORY__, "MtpSampleProjects", "Mtp.XUnit", "Mtp.XUnit.fsproj")
+
+  /// The name of the process the platform launches for the MTP project's apphost.
+  let mtpProcessName = "Mtp.XUnit"
+
+  let isFrom (project: string) (projectFilePath: string) =
+    System.String.Equals(
+      Path.GetFullPath projectFilePath,
+      Path.GetFullPath project,
+      System.StringComparison.OrdinalIgnoreCase
+    )
+
+  /// The solution sits beside the projects rather than above them, so they are built and
+  /// restored here, before the server loads them.
+  let build () =
+    for project in [ vsTestProject; mtpProject ] do
+      let buildResult = DotnetCli.build project
+
+      Expect.equal 0 buildResult.ExitCode $"Workspace build failed with: {buildResult.StdErr} \nProject: {project}"
+
+/// Records whether a process of the given name starts while it is watched. Processes already
+/// running when the watch begins are ignored. The watch polls, so a process that lives for less
+/// than one poll can go unseen; a testing platform host lives for its whole discovery or run.
+type ProcessLaunchWatch(processName: string) =
+  let processIds () =
+    System.Diagnostics.Process.GetProcessesByName processName
+    |> Array.map (fun p ->
+      use p = p
+      p.Id)
+    |> set
+
+  let preexisting = processIds ()
+  let launched = ref false
+  let tokenSource = new CancellationTokenSource()
+
+  let poller =
+    System.Threading.Tasks.Task.Run(fun () ->
+      while not tokenSource.IsCancellationRequested do
+        if not (Set.isSubset (processIds ()) preexisting) then
+          Volatile.Write(&launched.contents, true)
+
+        Thread.Sleep 20)
+
+  member _.Launched = Volatile.Read(&launched.contents)
+
+  interface System.IDisposable with
+    member _.Dispose() =
+      tokenSource.Cancel()
+      poller.Wait()
+      tokenSource.Dispose()
+
 let tests createServer =
   let initializeServer workspaceRoot =
     async {
@@ -414,6 +474,276 @@ let tests createServer =
             let! res = server.TestRunTests(runRequest)
             Expect.isError res "a VSTest expression cannot silently select all MTP tests"
           } ]
+      testList
+        "Mixed VSTest and Microsoft.Testing.Platform workspace"
+        (let initializeMixedServerWith (config: FSharpConfigDto) =
+          async {
+            MixedWorkspace.build ()
+
+            let! server, event =
+              serverInitialize
+                MixedWorkspace.root
+                { config with
+                    EnableTestingPlatform = Some true }
+                createServer
+
+            do! waitForWorkspaceFinishedParsing event
+            return server, event
+          }
+
+         let initializeMixedServer () = initializeMixedServerWith defaultConfigDto
+
+         /// VSTest cannot be found under this root, so a request that reached VSTest would fail.
+         let initializeMixedServerWithoutVsTest () =
+           initializeMixedServerWith
+             { defaultConfigDto with
+                 DotNetRoot = Some(Path.Combine(MixedWorkspace.root, "missing-dotnet")) }
+
+         /// Every test item a run reported, whether as a result or as an active test.
+         let collectRunProgress (event: ClientEvents) =
+           let reported =
+             System.Collections.Concurrent.ConcurrentBag<FsAutoComplete.TestServer.TestItem>()
+
+           let subscription =
+             event.Subscribe(fun (msgType: string, data: obj) ->
+               if msgType = "test/testRunProgressUpdate" then
+                 let progress: TestRunProgress =
+                   data :?> PlainNotification
+                   |> _.Content
+                   |> FsAutoComplete.JsonSerializer.readJson
+
+                 progress.TestResults |> Array.iter (fun result -> reported.Add result.TestItem)
+                 progress.ActiveTests |> Array.iter reported.Add)
+
+           reported, subscription
+
+         let isVsTestItem (item: FsAutoComplete.TestServer.TestItem) =
+           item.ExecutorUri <> FsAutoComplete.TestServer.TestItem.mtpExecutorUri
+
+         let discoverMtpUid (server: FsAutoComplete.Lsp.IFSharpLspServer) =
+           async {
+             let! discovery = server.TestDiscoverTests()
+
+             return
+               discovery
+               |> TestDiscoveryResult.tryUnwrapTestDiscoveryResult
+               |> List.find (fun test ->
+                 test.IsLeaf
+                 && test.FullName = "Tests.My test"
+                 && MixedWorkspace.isFrom MixedWorkspace.mtpProject test.ProjectFilePath)
+               |> _.PlatformUid
+               |> Option.get
+           }
+
+         let expectOnlyFrom project (items: FsAutoComplete.TestServer.TestItem list) message =
+           let strays =
+             items
+             |> List.filter (fun item -> not (MixedWorkspace.isFrom project item.ProjectFilePath))
+             |> List.map (fun item -> item.ProjectFilePath, item.FullName)
+
+           Expect.isEmpty strays message
+
+         [ testCaseAsync "discovery reports both platforms' tests, each under its own project, with distinct ids"
+           <| async {
+             let! server, _ = initializeMixedServer ()
+             use server = server
+
+             let! res = server.TestDiscoverTests()
+             let discovered = TestDiscoveryResult.tryUnwrapTestDiscoveryResult res
+             let vsTestItems, mtpItems = discovered |> List.partition isVsTestItem
+
+             let leafNames items =
+               items
+               |> List.filter (fun (item: FsAutoComplete.TestServer.TestItem) -> item.IsLeaf)
+               |> List.map _.FullName
+               |> List.sort
+
+             Expect.equal (leafNames vsTestItems) [ "Tests.My test" ] "VSTest discovered the VSTest project's test"
+
+             Expect.containsAll
+               (leafNames mtpItems)
+               [ "Tests.My test"; "Tests.Fails"; "Tests.Skipped" ]
+               "the platform discovered the MTP project's tests"
+
+             expectOnlyFrom MixedWorkspace.vsTestProject vsTestItems "VSTest reports only the VSTest project"
+             expectOnlyFrom MixedWorkspace.mtpProject mtpItems "the platform reports only the MTP project"
+
+             Expect.isTrue
+               (vsTestItems |> List.forall (fun item -> item.PlatformUid.IsNone))
+               "a VSTest test carries no platform uid"
+
+             Expect.isTrue
+               (mtpItems
+                |> List.filter _.IsLeaf
+                |> List.forall (fun item -> item.PlatformUid.IsSome))
+               "every runnable platform test carries a uid"
+
+             let duplicateIds =
+               discovered |> List.countBy _.Id |> List.filter (fun (_, count) -> count > 1)
+
+             Expect.isEmpty duplicateIds "ids stay distinct"
+
+             // The platform keys its tests by uid and VSTest by name, so the two could not collide
+             // even unscoped; what matters is that each id is scoped to its project and framework.
+             let unscoped =
+               discovered
+               |> List.filter _.IsLeaf
+               |> List.filter (fun item ->
+                 let key = item.PlatformUid |> Option.defaultValue item.FullName
+
+                 item.Id
+                 <> FsAutoComplete.TestServer.TestItem.idOf item.ProjectFilePath item.TargetFramework key)
+               |> List.map _.Id
+
+             Expect.isEmpty unscoped "every test's id is scoped to its project and framework"
+
+             let itemsById = discovered |> List.map (fun item -> item.Id, item) |> Map.ofList
+
+             let crossProjectParents =
+               discovered
+               |> List.choose (fun item ->
+                 item.ParentId
+                 |> Option.bind itemsById.TryFind
+                 |> Option.filter (fun parent -> parent.ProjectFilePath <> item.ProjectFilePath)
+                 |> Option.map (fun parent -> item.Id, parent.Id))
+
+             Expect.isEmpty crossProjectParents "no test is grouped under the other project's tree"
+           }
+
+           testCaseAsync "a run limited to the VSTest project leaves the testing platform application alone"
+           <| async {
+             let! server, event = initializeMixedServer ()
+             use server = server
+             let reported, subscription = collectRunProgress event
+             use _ = subscription
+             use mtpLaunches = new ProcessLaunchWatch(MixedWorkspace.mtpProcessName)
+
+             let runRequest: TestRunRequest =
+               { LimitToProjects = Some [ MixedWorkspace.vsTestProject ]
+                 TestCaseFilter = None
+                 TestUids = None
+                 AttachDebugger = false }
+
+             let! res = server.TestRunTests(runRequest)
+             let results = TestRunResult.tryUnwrapTestRunResult res
+
+             Expect.equal
+               (results |> List.map (fun result -> result.TestItem.FullName, result.Outcome))
+               ExpectedTests.VSTestXunitTests
+               "the VSTest project's test ran"
+
+             expectOnlyFrom MixedWorkspace.vsTestProject (results |> List.map _.TestItem) "only VSTest results"
+             expectOnlyFrom MixedWorkspace.vsTestProject (List.ofSeq reported) "only VSTest progress"
+             Expect.isFalse mtpLaunches.Launched "the testing platform application was not launched"
+           }
+
+           testCaseAsync "a VSTest selection with no platform uids leaves the testing platform application alone"
+           <| async {
+             let! server, event = initializeMixedServer ()
+             use server = server
+             let reported, subscription = collectRunProgress event
+             use _ = subscription
+             use mtpLaunches = new ProcessLaunchWatch(MixedWorkspace.mtpProcessName)
+
+             // The shape a client sends for a selection of VSTest tests alone: a filter for
+             // VSTest and an explicitly empty uid set for the platform.
+             let runRequest: TestRunRequest =
+               { LimitToProjects = None
+                 TestCaseFilter = Some "FullyQualifiedName~My test"
+                 TestUids = Some [||]
+                 AttachDebugger = false }
+
+             let! res = server.TestRunTests(runRequest)
+             let results = TestRunResult.tryUnwrapTestRunResult res
+
+             Expect.equal
+               (results |> List.map (fun result -> result.TestItem.FullName, result.Outcome))
+               ExpectedTests.VSTestXunitTests
+               "the selected VSTest test ran"
+
+             expectOnlyFrom MixedWorkspace.vsTestProject (results |> List.map _.TestItem) "only VSTest results"
+             expectOnlyFrom MixedWorkspace.vsTestProject (List.ofSeq reported) "only VSTest progress"
+             Expect.isFalse mtpLaunches.Launched "the testing platform application was not launched"
+           }
+
+           testCaseAsync "a run limited to the testing platform project never reaches VSTest"
+           <| async {
+             // Discovery needs VSTest for the other project, so the uid is found by a server
+             // that can reach it and run by one that cannot.
+             let! selectedUid =
+               async {
+                 let! server, _ = initializeMixedServer ()
+                 use server = server
+                 return! discoverMtpUid server
+               }
+
+             let! server, event = initializeMixedServerWithoutVsTest ()
+             use server = server
+             let reported, subscription = collectRunProgress event
+             use _ = subscription
+
+             let runRequest: TestRunRequest =
+               { LimitToProjects = Some [ MixedWorkspace.mtpProject ]
+                 TestCaseFilter = None
+                 TestUids = Some [| selectedUid |]
+                 AttachDebugger = false }
+
+             let! res = server.TestRunTests(runRequest)
+             let results = TestRunResult.tryUnwrapTestRunResult res
+
+             Expect.equal
+               (results |> List.map (fun result -> result.TestItem.FullName, result.Outcome))
+               [ "Tests.My test", FsAutoComplete.TestServer.TestOutcome.Passed ]
+               "only the selected platform test ran"
+
+             expectOnlyFrom MixedWorkspace.mtpProject (results |> List.map _.TestItem) "only platform results"
+             expectOnlyFrom MixedWorkspace.mtpProject (List.ofSeq reported) "only platform progress"
+           }
+
+           testCaseAsync "a run of everything reports both platforms' tests"
+           <| async {
+             let! server, event = initializeMixedServer ()
+             use server = server
+             let reported, subscription = collectRunProgress event
+             use _ = subscription
+             use mtpLaunches = new ProcessLaunchWatch(MixedWorkspace.mtpProcessName)
+
+             let runRequest: TestRunRequest =
+               { LimitToProjects = None
+                 TestCaseFilter = None
+                 TestUids = None
+                 AttachDebugger = false }
+
+             let! res = server.TestRunTests(runRequest)
+             let results = TestRunResult.tryUnwrapTestRunResult res
+
+             let vsTestResults, mtpResults =
+               results |> List.partition (_.TestItem >> isVsTestItem)
+
+             Expect.equal
+               (vsTestResults
+                |> List.map (fun result -> result.TestItem.FullName, result.Outcome))
+               ExpectedTests.VSTestXunitTests
+               "the VSTest project's test ran"
+
+             Expect.contains
+               (mtpResults |> List.map (fun result -> result.TestItem.FullName, result.Outcome))
+               ("Tests.My test", FsAutoComplete.TestServer.TestOutcome.Passed)
+               "the platform project's tests ran"
+
+             expectOnlyFrom MixedWorkspace.vsTestProject (vsTestResults |> List.map _.TestItem) "VSTest results"
+             expectOnlyFrom MixedWorkspace.mtpProject (mtpResults |> List.map _.TestItem) "platform results"
+
+             let reportedProjects =
+               reported
+               |> Seq.map (fun item -> MixedWorkspace.isFrom MixedWorkspace.mtpProject item.ProjectFilePath)
+               |> Seq.distinct
+               |> List.ofSeq
+
+             Expect.hasLength reportedProjects 2 "progress arrived from both projects"
+             // Shows the watch the other runs rely on can see the application start at all.
+             Expect.isTrue mtpLaunches.Launched "the testing platform application was launched"
+           } ])
       testList
         "RunTests"
         [ testCaseAsync "it should report tests of all basic outcomes"

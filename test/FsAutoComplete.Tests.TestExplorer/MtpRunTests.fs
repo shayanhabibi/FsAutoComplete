@@ -1,7 +1,11 @@
 module MtpRunTests
 
 open Expecto
+open System
+open System.Diagnostics
 open System.IO
+open System.Threading
+open System.Threading.Tasks
 open FsAutoComplete.TestServer
 open FsAutoComplete.TestingPlatform.Client
 
@@ -94,6 +98,71 @@ let tests =
 
         Expect.isSome processId "the debugger was asked to attach to the test application"
         Expect.isNonEmpty results "the run still completes when attachment is declined"
+      }
+
+      testCaseAsync "cancelling an executing test stops the run and its host"
+      <| async {
+        let! discovered = MtpWrapper.discoverTestsAsync ignore [ sampleApp ]
+
+        let uid =
+          discovered
+          |> List.find (fun (_, node) -> nameOf node = "Tests.Waits for cancellation")
+          |> snd
+          |> _.Uid
+
+        use cancellation = new CancellationTokenSource()
+
+        let launched =
+          TaskCompletionSource<Process>(TaskCreationOptions.RunContinuationsAsynchronously)
+
+        let mutable gate = None
+
+        let run =
+          MtpWrapper.runTestsWithDebuggerAsync
+            ignore
+            (Some(fun pid ->
+              let path = Path.Combine(Path.GetTempPath(), $"fsac-mtp-cancellation-{pid}")
+              gate <- Some path
+              File.WriteAllText(path, "wait")
+              launched.SetResult(Process.GetProcessById pid)
+              false))
+            [ sampleApp, MtpWrapper.TestSelection.Uids [ uid ] ]
+          |> fun operation -> Async.StartAsTask(operation, cancellationToken = cancellation.Token)
+
+        try
+          let! testProcess = launched.Task.WaitAsync(TimeSpan.FromSeconds 30.0) |> Async.AwaitTask
+          let started = gate.Value + ".started"
+          let elapsed = Stopwatch.StartNew()
+
+          while not (File.Exists started) && elapsed.Elapsed < TimeSpan.FromSeconds 30.0 do
+            do! Async.Sleep 25
+
+          Expect.isTrue (File.Exists started) "the test body started before cancellation"
+          Expect.isFalse run.IsCompleted "the test is still executing when cancellation is requested"
+          cancellation.Cancel()
+
+          let! completed = Task.WhenAny(run :> Task, Task.Delay 5000) |> Async.AwaitTask
+
+          Expect.isTrue
+            (obj.ReferenceEquals(completed, run))
+            "cancelling an executing MTP test must complete the run within five seconds"
+
+          Expect.isTrue run.IsCanceled $"the run completes as cancelled; status: {run.Status}; error: {run.Exception}"
+          Expect.isTrue (testProcess.WaitForExit 5000) "cancellation terminates the test host"
+        finally
+          cancellation.Cancel()
+
+          if launched.Task.IsCompletedSuccessfully then
+            use testProcess = launched.Task.Result
+
+            if not testProcess.HasExited then
+              testProcess.Kill(true)
+              testProcess.WaitForExit(5000) |> ignore
+
+          gate
+          |> Option.iter (fun path ->
+            File.Delete path
+            File.Delete(path + ".started"))
       }
 
       testCaseAsync "runs only the tests it is asked to run"

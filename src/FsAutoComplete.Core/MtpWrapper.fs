@@ -22,12 +22,28 @@ module MtpWrapper =
     { MtpClientOptions.Default with
         ClientName = "FsAutoComplete" }
 
+  // AwaitTask delivers task cancellation to the exception continuation. Preserve request
+  // cancellation as async cancellation after the client's resources have been disposed.
+  let private withRequestCancellation operation =
+    async {
+      let! cancellationToken = Async.CancellationToken
+
+      try
+        return! operation
+      with :? OperationCanceledException as error when cancellationToken.IsCancellationRequested ->
+        return! Async.FromContinuations(fun (_, _, cancelled) -> cancelled error)
+    }
+
   /// Collects every node an application reports, notifying as the batches arrive.
   let private discoverFromAsync (notify: TestDiscoveryUpdate -> unit) (application: TestApplication) =
     async {
+      let! cancellationToken = Async.CancellationToken
       let discovered = ResizeArray<DiscoveredNode>()
 
-      let! client = MtpClient.LaunchAsync(application, clientOptions) |> Async.AwaitTask
+      let! client =
+        MtpClient.LaunchAsync(application, clientOptions, cancellationToken)
+        |> Async.AwaitTask
+
       use client = client
 
       use _ =
@@ -39,12 +55,13 @@ module MtpWrapper =
       use _ =
         client.LogReceived.Subscribe(fun log -> notify (LogMessage(log.Level, log.Message)))
 
-      let! _capabilities = client.InitializeAsync() |> Async.AwaitTask
-      do! client.DiscoverTestsAsync() |> Async.AwaitTask
-      do! client.ExitAsync() |> Async.AwaitTask
+      let! _capabilities = client.InitializeAsync(cancellationToken) |> Async.AwaitTask
+      do! client.DiscoverTestsAsync(cancellationToken) |> Async.AwaitTask
+      do! client.ExitAsync(cancellationToken) |> Async.AwaitTask
 
       return List.ofSeq discovered
     }
+    |> withRequestCancellation
 
   /// A node reported while running, paired with the application that reported it. A test is
   /// reported more than once: once as it starts, and again with its outcome.
@@ -93,9 +110,13 @@ module MtpWrapper =
     ((application, selection): RunRequest)
     =
     async {
+      let! cancellationToken = Async.CancellationToken
       let reported = ResizeArray<RunNode>()
 
-      let! client = MtpClient.LaunchAsync(application, clientOptions) |> Async.AwaitTask
+      let! client =
+        MtpClient.LaunchAsync(application, clientOptions, cancellationToken)
+        |> Async.AwaitTask
+
       use client = client
 
       use _ =
@@ -126,7 +147,7 @@ module MtpWrapper =
       attachOnce
       |> Option.iter (fun attach -> client.ServerRequestHandler <- Some(attachDebuggerHandler attach))
 
-      let! _capabilities = client.InitializeAsync() |> Async.AwaitTask
+      let! _capabilities = client.InitializeAsync(cancellationToken) |> Async.AwaitTask
 
       // Protocol 1.0 reserves attachDebugger but its server never sends that request.
       // The launched application is the test host, so attach to its pid before execution.
@@ -134,14 +155,15 @@ module MtpWrapper =
 
       let! _result =
         match selection with
-        | TestSelection.All -> client.RunTestsAsync()
-        | TestSelection.Uids uids -> client.RunTestsAsync(uids)
+        | TestSelection.All -> client.RunTestsAsync(cancellationToken)
+        | TestSelection.Uids uids -> client.RunTestsAsync(uids, cancellationToken)
         |> Async.AwaitTask
 
-      do! client.ExitAsync() |> Async.AwaitTask
+      do! client.ExitAsync(cancellationToken) |> Async.AwaitTask
 
       return List.ofSeq reported
     }
+    |> withRequestCancellation
 
   /// Runs the requested tests of every given application. A debugger is attached only where the
   /// application asks for one, which it does when the run was started under a debugger.

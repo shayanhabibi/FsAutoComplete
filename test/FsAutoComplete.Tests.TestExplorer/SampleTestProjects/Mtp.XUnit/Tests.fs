@@ -20,3 +20,16 @@ let ``Skipped`` () = Assert.True(true)
 let ``Writes to stdout`` () =
   System.Console.WriteLine("Where do I show up in the results")
   Assert.True(true)
+
+[<Fact>]
+let ``Waits for cancellation`` () =
+  // Only the cancellation regression creates this gate, before execution starts.
+  let gate =
+    System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"fsac-mtp-cancellation-{System.Environment.ProcessId}")
+
+  if System.IO.File.Exists gate then
+    System.IO.File.WriteAllText(gate + ".started", "started")
+    let elapsed = System.Diagnostics.Stopwatch.StartNew()
+
+    while System.IO.File.Exists gate && elapsed.Elapsed < System.TimeSpan.FromSeconds 60.0 do
+      System.Threading.Thread.Sleep 25

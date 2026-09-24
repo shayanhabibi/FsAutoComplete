@@ -154,7 +154,8 @@ let tests createServer =
               serverInitialize
                 workspaceRoot
                 { defaultConfigDto with
-                    EnableTestingPlatform = Some true }
+                    EnableTestingPlatform = Some true
+                    DotNetRoot = Some(Path.Combine(workspaceRoot, "missing-dotnet")) }
                 createServer
 
             do! waitForWorkspaceFinishedParsing event
@@ -182,7 +183,13 @@ let tests createServer =
               |> List.filter _.IsLeaf
               |> List.map _.FullName
 
-            Expect.contains actual "Tests.My test" "the tests of a testing platform project are discovered"
+            Expect.contains
+              actual
+              "Tests.My test"
+              (sprintf
+                "the tests of a testing platform project are discovered; actual: %A; logs: %A"
+                actual
+                (List.ofSeq logs))
 
             let vsTestComplaints =
               logs |> Seq.filter (fun log -> log.Contains "Parameter 'sources'") |> List.ofSeq
@@ -198,7 +205,8 @@ let tests createServer =
               serverInitialize
                 workspaceRoot
                 { defaultConfigDto with
-                    EnableTestingPlatform = Some true }
+                    EnableTestingPlatform = Some true
+                    DotNetRoot = Some(Path.Combine(workspaceRoot, "missing-dotnet")) }
                 createServer
 
             do! waitForWorkspaceFinishedParsing event

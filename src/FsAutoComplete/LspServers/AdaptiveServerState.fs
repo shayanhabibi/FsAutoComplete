@@ -2734,8 +2734,6 @@ type AdaptiveState
   member state.DiscoverTests() =
 
     asyncResult {
-      let! vstestBinary = TestServer.VSTestWrapper.tryFindVsTestFromDotnetRoot state.Config.DotNetRoot state.RootPath
-
       let! projects = projectOptions |> AsyncAVal.forceAsync
 
       // Exit early if there are no projects present at all
@@ -2828,12 +2826,18 @@ type AdaptiveState
 
         let! testCases =
           if List.isEmpty vsTestProjects then
-            async { return [] }
+            asyncResult { return [] }
           else
-            TestServer.VSTestWrapper.discoverTestsAsync
-              vstestBinary.FullName
-              onDiscoveryProgress
-              (vsTestProjects |> List.map _.TargetPath)
+            asyncResult {
+              let! vstestBinary =
+                TestServer.VSTestWrapper.tryFindVsTestFromDotnetRoot state.Config.DotNetRoot state.RootPath
+
+              return!
+                TestServer.VSTestWrapper.discoverTestsAsync
+                  vstestBinary.FullName
+                  onDiscoveryProgress
+                  (vsTestProjects |> List.map _.TargetPath)
+            }
 
         let! mtpNodes =
           TestServer.MtpWrapper.discoverTestsAsync onMtpDiscoveryProgress (mtpProjects |> List.map _.TargetPath)
@@ -2851,8 +2855,6 @@ type AdaptiveState
     (shouldDebug: bool)
     =
     asyncResult {
-      let! vstestBinary = TestServer.VSTestWrapper.tryFindVsTestFromDotnetRoot state.Config.DotNetRoot state.RootPath
-
       let! projects = projectOptions |> AsyncAVal.forceAsync
 
       let testProjects =
@@ -2987,15 +2989,21 @@ type AdaptiveState
       // platform projects must not reach it.
       let! testResults =
         if testProjectBinaries |> List.isEmpty then
-          async { return [] }
+          asyncResult { return [] }
         else
-          TestServer.VSTestWrapper.runTestsAsync
-            vstestBinary.FullName
-            onTestRunProgress
-            onAttachDebugger
-            testProjectBinaries
-            testCaseFilter
-            shouldDebug
+          asyncResult {
+            let! vstestBinary =
+              TestServer.VSTestWrapper.tryFindVsTestFromDotnetRoot state.Config.DotNetRoot state.RootPath
+
+            return!
+              TestServer.VSTestWrapper.runTestsAsync
+                vstestBinary.FullName
+                onTestRunProgress
+                onAttachDebugger
+                testProjectBinaries
+                testCaseFilter
+                shouldDebug
+          }
 
       let mtpSelection =
         testUids

@@ -12,6 +12,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The adjacent empty paket.references keeps the test host's Paket dependencies out of this fixture. -->
     <PackageReference Include="FSharp.Core" Version="9.0.303" />
     <PackageReference Include="xunit.v3" Version="4.0.1" />
   </ItemGroup>

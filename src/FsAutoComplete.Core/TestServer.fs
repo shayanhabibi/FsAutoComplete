@@ -119,7 +119,8 @@ module TestItem =
         { StartLine = startLine
           EndLine = location.LineEnd |> Option.defaultValue startLine })
 
-    let isLeaf = node.NodeType <> Some FsAutoComplete.TestingPlatform.Client.NodeType.Group
+    let isLeaf =
+      node.NodeType <> Some FsAutoComplete.TestingPlatform.Client.NodeType.Group
 
     { Id = idOfUid node.Uid
       ParentId =

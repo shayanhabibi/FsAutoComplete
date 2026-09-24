@@ -69,7 +69,13 @@ module TestItem =
       // xUnit repeats the fully-qualified name inside the display name and appends the case
       // parameters to it rather than nesting them.
       if displayName <> fullName then
-        let caseFragment = displayName.Split('.') |> Array.last
+        let caseFragment =
+          if displayName.StartsWith(fullName, StringComparison.Ordinal) then
+            let methodName = fullName.Split('.') |> Array.last
+            methodName + displayName.Substring(fullName.Length)
+          else
+            displayName
+
         $"{fullName}.{caseFragment}"
       else
         fullName

@@ -6,6 +6,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="ResourceLocators.fs" />
+    <Compile Include="TestIdTests.fs" />
     <Compile Include="TestHierarchyTests.fs" />
     <Compile Include="TestPlatformTests.fs" />
     <Compile Include="MtpMappingTests.fs" />

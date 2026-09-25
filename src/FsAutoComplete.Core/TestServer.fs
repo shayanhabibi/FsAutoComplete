@@ -49,6 +49,125 @@ module TestFrameworkId =
     else
       None
 
+/// What a test id addresses within its project and target framework.
+[<RequireQualifiedAccess>]
+type TestIdTarget =
+  /// A VSTest case, keyed by the id its adapter assigned. Parameterised cases share a
+  /// fully-qualified name but not this id.
+  | VsTestCase of Guid
+  /// A runnable Microsoft.Testing.Platform node, keyed by its uid.
+  | MtpNode of uid: string
+  /// A grouping node, which holds tests but cannot be run itself.
+  | Group of key: string
+
+type ParsedTestId =
+  { ProjectFilePath: string
+    TargetFramework: string
+    Target: TestIdTarget }
+
+/// Test ids are issued by the server and opaque to clients. An id names its own project,
+/// target framework and platform so a run can be routed without a lookup, and is derived from
+/// what the platform reports rather than from display names, so a run reproduces the id that
+/// discovery issued.
+///
+/// Format: `t1|kind|project|framework|key`, each field escaped so that splitting on `|` always
+/// yields five fields.
+module TestId =
+  [<Literal>]
+  let private version = "t1"
+
+  [<Literal>]
+  let private vsTestKind = "vs"
+
+  [<Literal>]
+  let private mtpKind = "mtp"
+
+  [<Literal>]
+  let private groupKind = "grp"
+
+  /// Percent-encodes the field separator and the escape character, and nothing else, so an id
+  /// stays readable in logs.
+  let escape (value: string) = value.Replace("%", "%25").Replace("|", "%7C")
+
+  /// Reverses `escape`, rejecting any escape it does not produce.
+  let unescape (value: string) : Result<string, string> =
+    let decoded = Text.StringBuilder(value.Length)
+
+    let rec go index =
+      if index >= value.Length then
+        Ok(decoded.ToString())
+      elif value[index] <> '%' then
+        decoded.Append(value[index]) |> ignore
+        go (index + 1)
+      elif String.CompareOrdinal(value, index, "%25", 0, 3) = 0 then
+        decoded.Append('%') |> ignore
+        go (index + 3)
+      elif String.CompareOrdinal(value, index, "%7C", 0, 3) = 0 then
+        decoded.Append('|') |> ignore
+        go (index + 3)
+      else
+        Error $"Malformed escape at position {index}"
+
+    go 0
+
+  let private create kind (projFilePath: string) (targetFramework: string) (key: string) =
+    String.Join("|", [| version; kind; escape projFilePath; escape targetFramework; escape key |])
+
+  let ofVsTestCase
+    (projFilePath: string)
+    (targetFramework: string)
+    (testCase: Microsoft.VisualStudio.TestPlatform.ObjectModel.TestCase)
+    =
+    create vsTestKind projFilePath targetFramework (testCase.Id.ToString("D"))
+
+  /// The id of a grouping node, keyed by its name for VSTest or its uid for the testing platform.
+  let group (projFilePath: string) (targetFramework: string) (key: string) =
+    create groupKind projFilePath targetFramework key
+
+  let ofMtpNode
+    (projFilePath: string)
+    (targetFramework: string)
+    (node: FsAutoComplete.TestingPlatform.Client.TestNodeUpdate)
+    =
+    if node.NodeType = Some FsAutoComplete.TestingPlatform.Client.NodeType.Group then
+      group projFilePath targetFramework node.Uid
+    else
+      create mtpKind projFilePath targetFramework node.Uid
+
+  let tryParse (id: string) : Result<ParsedTestId, string> =
+    let nonEmpty name (value: Result<string, string>) =
+      value
+      |> Result.bind (fun v ->
+        if String.IsNullOrEmpty v then
+          Error $"The {name} is empty"
+        else
+          Ok v)
+
+    match id.Split('|') with
+    | [| v; kind; projFilePath; targetFramework; key |] when v = version ->
+      let target =
+        match kind, unescape key |> nonEmpty "key" with
+        | _, Error e -> Error e
+        | k, Ok key when k = vsTestKind ->
+          match Guid.TryParseExact(key, "D") with
+          | true, caseId -> Ok(TestIdTarget.VsTestCase caseId)
+          | false, _ -> Error $"The test case id '{key}' is not a guid"
+        | k, Ok key when k = mtpKind -> Ok(TestIdTarget.MtpNode key)
+        | k, Ok key when k = groupKind -> Ok(TestIdTarget.Group key)
+        | k, Ok _ -> Error $"Unknown test id kind '{k}'"
+
+      match unescape projFilePath |> nonEmpty "project", unescape targetFramework, target with
+      | Ok projFilePath, Ok targetFramework, Ok target ->
+        Ok
+          { ProjectFilePath = projFilePath
+            TargetFramework = targetFramework
+            Target = target }
+      | Error e, _, _
+      | _, Error e, _
+      | _, _, Error e -> Error $"Malformed test id '{id}': {e}"
+    | [| v; _; _; _; _ |] -> Error $"Unsupported test id version '{v}' in '{id}'"
+    | _ -> Error $"Malformed test id '{id}': expected five '|'-separated fields"
+
 module TestItem =
   /// Unique within a server session: a name repeated across projects or target frameworks
   /// yields a different id per project and framework.

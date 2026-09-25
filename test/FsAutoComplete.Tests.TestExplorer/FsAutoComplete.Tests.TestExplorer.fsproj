@@ -26,6 +26,8 @@
       dotnet build $(MSBuildProjectDirectory)/SampleTestProjects/VSTest.XUnit.Tests/
       dotnet build $(MSBuildProjectDirectory)/SampleTestProjects/VSTest.XUnit.RunResults/
       dotnet build $(MSBuildProjectDirectory)/SampleTestProjects/VSTest.NUnit/
+      dotnet build $(MSBuildProjectDirectory)/SampleTestProjects/VSTest.XUnit.Theories/
+      dotnet build $(MSBuildProjectDirectory)/SampleTestProjects/VSTest.MSTest.DataRows/
       dotnet build $(MSBuildProjectDirectory)/SampleTestProjects/Mtp.XUnit/
     </PostBuildEvent>
   </PropertyGroup>

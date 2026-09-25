@@ -585,15 +585,15 @@ let tests createServer =
              expectOnlyFrom MixedWorkspace.vsTestProject vsTestItems "VSTest reports only the VSTest project"
              expectOnlyFrom MixedWorkspace.mtpProject mtpItems "the platform reports only the MTP project"
 
-             Expect.isTrue
-               (vsTestItems |> List.forall (fun item -> item.PlatformUid.IsNone))
-               "a VSTest test carries no platform uid"
+             // Clients address a test by its id alone, whichever platform runs it.
+             let json =
+               match res with
+               | Ok notification -> (Option.get notification).Content
+               | Error err -> failtest err.Message
 
-             Expect.isTrue
-               (mtpItems
-                |> List.filter _.IsLeaf
-                |> List.forall (fun item -> item.PlatformUid.IsSome))
-               "every runnable platform test carries a uid"
+             Expect.isFalse
+               (json.Contains("platformUid", System.StringComparison.OrdinalIgnoreCase))
+               "no test carries a platform-specific address"
 
              let duplicateIds =
                discovered |> List.countBy _.Id |> List.filter (fun (_, count) -> count > 1)

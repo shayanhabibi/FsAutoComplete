@@ -19,9 +19,6 @@ type TestItem =
     /// Example: executor://xunit/VsTestRunner2/netcoreapp
     /// Used for determining the test library, which effects how tests names are broken down
     ExecutorUri: string
-    /// Addresses a runnable test to Microsoft.Testing.Platform, which identifies tests by opaque
-    /// uid. A grouping node and a test run under VSTest carry `None`.
-    PlatformUid: string option
     ProjectFilePath: string
     TargetFramework: string
     CodeFilePath: string option
@@ -259,7 +256,6 @@ module TestItem =
       FullName = fullName
       DisplayName = testCase.DisplayName
       ExecutorUri = testCase.ExecutorUri |> string
-      PlatformUid = None
       ProjectFilePath = projFilePath
       TargetFramework = targetFramework
       CodeFilePath = Some testCase.CodeFilePath
@@ -300,7 +296,6 @@ module TestItem =
       FullName = node.DisplayName |> Option.defaultValue node.Uid
       DisplayName = node.DisplayName |> Option.defaultValue node.Uid
       ExecutorUri = mtpExecutorUri
-      PlatformUid = (if isLeaf then Some node.Uid else None)
       ProjectFilePath = projFilePath
       TargetFramework = targetFramework
       CodeFilePath = node.Location |> Option.map _.File
@@ -342,7 +337,6 @@ module TestHierarchy =
         IsLeaf = false
         FullName = fullName
         DisplayName = (splitSegments fullName |> List.last).Text
-        PlatformUid = None
         CodeFilePath = None
         CodeLocationRange = None }
 

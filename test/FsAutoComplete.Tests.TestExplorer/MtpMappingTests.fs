@@ -39,12 +39,6 @@ let mtpNodeTests =
               Target = TestIdTarget.MtpNode "a3f9" })
           "the id routes the uid to its project and framework"
 
-      testCase "the uid addresses the test to the platform"
-      <| fun _ ->
-        let actual = map (node "a3f9")
-
-        Expect.equal actual.PlatformUid (Some "a3f9") "the platform is asked to run the test by uid"
-
       testCase "the display name is the full name"
       <| fun _ ->
         let actual =
@@ -281,7 +275,6 @@ let mtpHierarchyTests =
       ExecutorUri = TestItem.mtpExecutorUri
       ProjectFilePath = project
       TargetFramework = framework
-      PlatformUid = Some id
       CodeFilePath = None
       CodeLocationRange = None }
 
@@ -291,8 +284,7 @@ let mtpHierarchyTests =
       <| fun _ ->
         let group =
           { leaf "b1c2" "Tests" None with
-              IsLeaf = false
-              PlatformUid = Some "b1c2" }
+              IsLeaf = false }
 
         let child = leaf "a3f9" "Tests.Adds" (Some "b1c2")
 
@@ -307,14 +299,13 @@ let mtpHierarchyTests =
         let names = actual |> List.map _.FullName |> List.sort
         Expect.equal names [ "Tests"; "Tests.Adds" ] "the name segment becomes a group"
 
-      testCase "a grouped leaf keeps the uid that addresses it"
+      testCase "a grouped leaf keeps the id that addresses it"
       <| fun _ ->
         let actual =
           TestHierarchy.withHierarchy [ leaf "a3f9" "Tests.Adds" None ]
           |> List.find _.IsLeaf
 
         Expect.equal actual.Id "a3f9" "the id the server gave the node survives grouping"
-        Expect.equal actual.PlatformUid (Some "a3f9") "the test can still be run"
 
       testCase "a synthesised group addresses no test"
       <| fun _ ->
@@ -322,7 +313,10 @@ let mtpHierarchyTests =
           TestHierarchy.withHierarchy [ leaf "a3f9" "Tests.Adds" None ]
           |> List.find (_.IsLeaf >> not)
 
-        Expect.isNone actual.PlatformUid "a group is not a test the platform can run"
+        Expect.equal
+          (TestId.tryParse actual.Id |> Result.map _.Target)
+          (Ok(TestIdTarget.Group "Tests"))
+          "a group is not a test a client can run"
 
       testCase "a grouped leaf is linked to its group"
       <| fun _ ->

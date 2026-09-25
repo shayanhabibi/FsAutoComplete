@@ -183,3 +183,66 @@ let parseErrorTests =
       rejects "t1|mtp||net8.0|a3f9" "an empty project"
       rejects "t1|mtp|/repo/p.fsproj|net8.0|" "an empty key"
       rejects "t1|grp|/repo/p%zz.fsproj|net8.0|Tests" "a malformed escape" ]
+
+[<Tests>]
+let formatTests =
+  let caseId = Guid.Parse "3f2504e0-4f89-11d3-9a0c-0305e82c3301"
+
+  let roundTrips description (id: string) =
+    testCase description
+    <| fun _ ->
+      let reformatted = TestId.tryParse id |> Result.map TestId.format
+      Expect.equal reformatted (Ok id) "format writes back the id that was parsed"
+
+  testList
+    "TestId.format"
+    [ roundTrips "a VSTest id" (TestId.ofVsTestCase project framework (vsTestCase caseId))
+      roundTrips "a testing platform id" (TestId.ofMtpNode project framework (mtpNode (Some NodeType.Action) "a|%b"))
+      roundTrips "a grouping id" (TestId.group "/repo/a|b.fsproj" framework "Tests+Nested") ]
+
+[<Tests>]
+let selectionTests =
+  let caseId = Guid.Parse "3f2504e0-4f89-11d3-9a0c-0305e82c3301"
+  let vsTestId = TestId.ofVsTestCase project framework (vsTestCase caseId)
+
+  testList
+    "TestRunSelection.ofRequest"
+    [ testCase "neither a filter nor ids runs everything"
+      <| fun _ -> Expect.equal (TestRunSelection.ofRequest None None) (Ok TestRunSelection.All) "all tests"
+
+      testCase "a filter alone selects by filter"
+      <| fun _ ->
+        Expect.equal
+          (TestRunSelection.ofRequest (Some "FullyQualifiedName~A") None)
+          (Ok(TestRunSelection.Filter "FullyQualifiedName~A"))
+          "a filter run"
+
+      testCase "ids alone select those tests"
+      <| fun _ ->
+        Expect.equal
+          (TestRunSelection.ofRequest None (Some [| vsTestId |]))
+          (Ok(
+            TestRunSelection.Ids
+              [ { ProjectFilePath = project
+                  TargetFramework = framework
+                  Target = TestIdTarget.VsTestCase caseId } ]
+          ))
+          "an id run"
+
+      testCase "an empty id list selects nothing rather than everything"
+      <| fun _ -> Expect.equal (TestRunSelection.ofRequest None (Some [||])) (Ok(TestRunSelection.Ids [])) "no tests"
+
+      testCase "ids and a filter together are rejected"
+      <| fun _ ->
+        Expect.isError
+          (TestRunSelection.ofRequest (Some "FullyQualifiedName~A") (Some [| vsTestId |]))
+          "the two selections are alternatives"
+
+      testCase "a malformed id is rejected"
+      <| fun _ -> Expect.isError (TestRunSelection.ofRequest None (Some [| "Tests.Adds" |])) "not an id"
+
+      testCase "a grouping id is rejected"
+      <| fun _ ->
+        Expect.isError
+          (TestRunSelection.ofRequest None (Some [| TestId.group project framework "Tests" |]))
+          "a client runs a grouping by its leaves" ]

@@ -169,6 +169,55 @@ module TestId =
     | [| v; _; _; _; _ |] -> Error $"Unsupported test id version '{v}' in '{id}'"
     | _ -> Error $"Malformed test id '{id}': expected five '|'-separated fields"
 
+  /// Writes a parsed id back out as the id it was parsed from, so a message can name it.
+  let format (id: ParsedTestId) =
+    match id.Target with
+    | TestIdTarget.VsTestCase caseId -> create vsTestKind id.ProjectFilePath id.TargetFramework (caseId.ToString("D"))
+    | TestIdTarget.MtpNode uid -> create mtpKind id.ProjectFilePath id.TargetFramework uid
+    | TestIdTarget.Group key -> group id.ProjectFilePath id.TargetFramework key
+
+/// Which tests a run was asked for. Ids and a filter are alternatives: an id names one test on
+/// either platform, while a filter is VSTest syntax.
+[<RequireQualifiedAccess>]
+type TestRunSelection =
+  | All
+  | Filter of testCaseFilter: string
+  /// Runnable tests by the id discovery issued them. An empty list runs none.
+  | Ids of ParsedTestId list
+
+module TestRunSelection =
+  /// Reads the selection of a run request, rejecting one the server cannot run as asked.
+  let ofRequest (testCaseFilter: string option) (testIds: string array option) : Result<TestRunSelection, string> =
+    let runnable (id: string) =
+      TestId.tryParse id
+      |> Result.bind (fun parsed ->
+        match parsed.Target with
+        | TestIdTarget.Group _ -> Error $"The test id '{id}' names a grouping; run the tests under it by their own ids"
+        | TestIdTarget.VsTestCase _
+        | TestIdTarget.MtpNode _ -> Ok parsed)
+
+    match testCaseFilter, testIds with
+    | Some _, Some _ -> Error "TestIds and TestCaseFilter are mutually exclusive"
+    | Some filter, None -> Ok(TestRunSelection.Filter filter)
+    | None, None -> Ok TestRunSelection.All
+    | None, Some ids ->
+      let rec parseAll parsed =
+        function
+        | [] -> Ok(TestRunSelection.Ids(List.rev parsed))
+        | id :: rest ->
+          match runnable id with
+          | Ok id -> parseAll (id :: parsed) rest
+          | Error e -> Error e
+
+      parseAll [] (List.ofArray ids)
+
+/// Why a test run did not complete. A request the server cannot honour is rejected before
+/// anything is launched; a run that fails once started is a different kind of failure.
+[<RequireQualifiedAccess>]
+type TestRunError =
+  | InvalidRequest of string
+  | RunFailed of string
+
 module TestItem =
   /// The name that identifies a single test case. xUnit and MSTest report every case of a
   /// parameterised test under one fully-qualified name and vary only the display name, so the

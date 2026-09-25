@@ -6,7 +6,8 @@ type TestFileRange = { StartLine: int; EndLine: int }
 
 type TestItem =
   {
-    /// Distinguishes this node from every other node reported by the server.
+    /// Distinguishes this node from every other node reported by the server. Issued by the server
+    /// and opaque to clients; see `TestId`.
     Id: string
     /// The `Id` of the node one level up, or `None` at the root of a project.
     ParentId: string option
@@ -169,11 +170,6 @@ module TestId =
     | _ -> Error $"Malformed test id '{id}': expected five '|'-separated fields"
 
 module TestItem =
-  /// Unique within a server session: a name repeated across projects or target frameworks
-  /// yields a different id per project and framework.
-  let idOf (projFilePath: string) (targetFramework: string) (fullName: string) =
-    $"{projFilePath}|{targetFramework}|{fullName}"
-
   /// The name that identifies a single test case. xUnit and MSTest report every case of a
   /// parameterised test under one fully-qualified name and vary only the display name, so the
   /// case data is appended to keep the cases apart.
@@ -208,7 +204,7 @@ module TestItem =
     let fullName =
       fullNameWithParameterisedCases (string testCase.ExecutorUri) testCase.FullyQualifiedName testCase.DisplayName
 
-    { Id = idOf projFilePath targetFramework fullName
+    { Id = TestId.ofVsTestCase projFilePath targetFramework testCase
       ParentId = None
       IsLeaf = true
       FullName = fullName
@@ -236,8 +232,6 @@ module TestItem =
     (targetFramework: string)
     (node: FsAutoComplete.TestingPlatform.Client.TestNodeUpdate)
     : TestItem =
-    let idOfUid = idOf projFilePath targetFramework
-
     let range (location: FsAutoComplete.TestingPlatform.Client.SourceLocation) =
       location.LineStart
       |> Option.map (fun startLine ->
@@ -247,11 +241,12 @@ module TestItem =
     let isLeaf =
       node.NodeType <> Some FsAutoComplete.TestingPlatform.Client.NodeType.Group
 
-    { Id = idOfUid node.Uid
+    { Id = TestId.ofMtpNode projFilePath targetFramework node
+      // Only a group can have children, so a parent is always addressed as one.
       ParentId =
         node.ParentUid
         |> Option.filter (String.IsNullOrEmpty >> not)
-        |> Option.map idOfUid
+        |> Option.map (TestId.group projFilePath targetFramework)
       IsLeaf = isLeaf
       FullName = node.DisplayName |> Option.defaultValue node.Uid
       DisplayName = node.DisplayName |> Option.defaultValue node.Uid
@@ -293,7 +288,7 @@ module TestHierarchy =
 
   let private groupingNode (template: TestItem) (fullName: string) =
     { template with
-        Id = TestItem.idOf template.ProjectFilePath template.TargetFramework fullName
+        Id = TestId.group template.ProjectFilePath template.TargetFramework fullName
         ParentId = None
         IsLeaf = false
         FullName = fullName
@@ -303,31 +298,19 @@ module TestHierarchy =
         CodeLocationRange = None }
 
   /// Returns the given tests plus a grouping node per name segment they share, each node
-  /// linked to its parent. A leaf without an id is given one derived from its name, and keeps
-  /// its own identity where a grouping name collides with it.
+  /// linked to its parent. Tests and groupings have ids of different kinds, so a test named like
+  /// a grouping sits beside it rather than replacing it.
   let withInferredGroupings (tests: TestItem list) : TestItem list =
     let parentOf (item: TestItem) =
       ancestorNames item.FullName
       |> List.tryLast
-      |> Option.map (TestItem.idOf item.ProjectFilePath item.TargetFramework)
-
-    let leaves =
-      tests
-      |> List.map (fun leaf ->
-        if String.IsNullOrEmpty leaf.Id then
-          { leaf with
-              Id = TestItem.idOf leaf.ProjectFilePath leaf.TargetFramework leaf.FullName }
-        else
-          leaf)
+      |> Option.map (TestId.group item.ProjectFilePath item.TargetFramework)
 
     let groupings =
-      leaves
+      tests
       |> List.collect (fun leaf -> ancestorNames leaf.FullName |> List.map (groupingNode leaf))
 
-    let leafIds = leaves |> List.map _.Id |> Set.ofList
-
-    leaves @ groupings
-    |> List.filter (fun node -> node.IsLeaf || not (leafIds.Contains node.Id))
+    tests @ groupings
     |> List.distinctBy _.Id
     |> List.map (fun node -> { node with ParentId = parentOf node })
 

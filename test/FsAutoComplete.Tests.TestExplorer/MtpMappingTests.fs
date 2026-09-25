@@ -31,7 +31,13 @@ let mtpNodeTests =
       <| fun _ ->
         let actual = map (node "a3f9")
 
-        Expect.equal actual.Id (TestItem.idOf project framework "a3f9") "the id is the uid scoped to the project"
+        Expect.equal
+          (TestId.tryParse actual.Id)
+          (Ok
+            { ProjectFilePath = project
+              TargetFramework = framework
+              Target = TestIdTarget.MtpNode "a3f9" })
+          "the id routes the uid to its project and framework"
 
       testCase "the uid addresses the test to the platform"
       <| fun _ ->
@@ -61,10 +67,12 @@ let mtpNodeTests =
             { node "a3f9" with
                 ParentUid = Some "b1c2" }
 
-        Expect.equal
-          actual.ParentId
-          (Some(TestItem.idOf project framework "b1c2"))
-          "the parent id matches the parent's id"
+        let parent =
+          map
+            { node "b1c2" with
+                NodeType = Some NodeType.Group }
+
+        Expect.equal actual.ParentId (Some parent.Id) "the parent id matches the parent's id"
 
       testCase "a node without a parent sits at the root"
       <| fun _ ->
@@ -222,7 +230,45 @@ let idScopeTests =
             TestItem.ofVsTestCase project "net9.0" (vsTestCase "Tests.My test") ]
           |> List.map _.Id
 
-        Expect.equal (distinctIds ids) 3 "each project and framework has its own id" ]
+        Expect.equal (distinctIds ids) 3 "each project and framework has its own id"
+
+      testCase "a group and a test with one uid have different ids"
+      <| fun _ ->
+        let ids =
+          [ map (node "Tests")
+            map
+              { node "Tests" with
+                  NodeType = Some NodeType.Group } ]
+          |> List.map _.Id
+
+        Expect.equal (distinctIds ids) 2 "a group cannot be mistaken for a runnable test"
+
+      testCase "a VSTest id routes the case to its project and framework"
+      <| fun _ ->
+        let testCase = vsTestCase "Tests.My test"
+        let actual = TestItem.ofVsTestCase project framework testCase
+
+        Expect.equal
+          (TestId.tryParse actual.Id)
+          (Ok
+            { ProjectFilePath = project
+              TargetFramework = framework
+              Target = TestIdTarget.VsTestCase testCase.Id })
+          "the id carries the adapter's case id"
+
+      testCase "a VSTest result keeps the discovery id when its display name changes"
+      <| fun _ ->
+        let discovered = vsTestCase "Tests.Adds"
+        let discoveryId = (TestItem.ofVsTestCase project framework discovered).Id
+
+        let ran = vsTestCase "Tests.Adds"
+        ran.Id <- discovered.Id
+        ran.DisplayName <- "Tests.Adds(a: 1)"
+
+        let result =
+          TestResult.ofVsTestResult project framework (Microsoft.VisualStudio.TestPlatform.ObjectModel.TestResult ran)
+
+        Expect.equal result.TestItem.Id discoveryId "the result lands on the test discovery reported" ]
 
 [<Tests>]
 let mtpHierarchyTests =

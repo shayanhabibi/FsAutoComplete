@@ -3,18 +3,19 @@ module TestHierarchyTests
 open Expecto
 open FsAutoComplete.TestServer
 
-let private leaf fullName : TestItem =
-  { Id = ""
-    ParentId = None
-    IsLeaf = true
-    FullName = fullName
+let private xunitExecutor = "executor://xunit/VsTestRunner2/netcoreapp"
+
+let private vsTestCase fullName =
+  Microsoft.VisualStudio.TestPlatform.ObjectModel.TestCase(
+    fullName,
+    System.Uri xunitExecutor,
+    "/repo/bin/Tests.dll",
     DisplayName = fullName
-    ExecutorUri = "executor://xunit/VsTestRunner2/netcoreapp"
-    PlatformUid = None
-    ProjectFilePath = "/repo/Tests.fsproj"
-    TargetFramework = "net8.0"
-    CodeFilePath = None
-    CodeLocationRange = None }
+  )
+
+let private leafIn projectFilePath fullName = TestItem.ofVsTestCase projectFilePath "net8.0" (vsTestCase fullName)
+
+let private leaf fullName = leafIn "/repo/Tests.fsproj" fullName
 
 let private byFullName (items: TestItem list) = items |> List.map (fun i -> i.FullName) |> List.sort
 
@@ -64,6 +65,8 @@ let parameterisedCaseTests =
             )
 
           testCase.DisplayName <- $"Tests.Adds{parameters}"
+          // The adapter gives each case its own id; one derived from the shared name would not.
+          testCase.Id <- System.Guid.NewGuid()
           TestItem.ofVsTestCase "/repo/Tests.fsproj" "net8.0" testCase
 
         let actual =
@@ -121,11 +124,40 @@ let tests =
 
       testCase "identical names in different projects stay distinct"
       <| fun _ ->
-        let other =
-          { leaf "Tests.First" with
-              ProjectFilePath = "/repo/Other.fsproj" }
+        let other = leafIn "/repo/Other.fsproj" "Tests.First"
 
         let actual = TestHierarchy.withInferredGroupings [ leaf "Tests.First"; other ]
+
         let ids = actual |> List.map _.Id |> List.distinct
 
-        Expect.hasLength ids 4 "two leaves and two groupings, none shared across projects" ]
+        Expect.hasLength ids 4 "two leaves and two groupings, none shared across projects"
+
+      testCase "cases with one name but different ids stay distinct"
+      <| fun _ ->
+        let case () =
+          let testCase = vsTestCase "Tests.Adds"
+          testCase.Id <- System.Guid.NewGuid()
+          TestItem.ofVsTestCase "/repo/Tests.fsproj" "net8.0" testCase
+
+        let actual =
+          TestHierarchy.withInferredGroupings [ case (); case () ] |> List.filter _.IsLeaf
+
+        Expect.hasLength actual 2 "the adapter's case ids tell the cases apart"
+
+      testCase "a test named like a grouping keeps both the test and the grouping"
+      <| fun _ ->
+        let actual =
+          TestHierarchy.withInferredGroupings [ leaf "Tests.A"; leaf "Tests.A.B" ]
+
+        let named fullName isLeaf =
+          actual
+          |> List.filter (fun i -> i.FullName = fullName && i.IsLeaf = isLeaf)
+          |> List.exactlyOne
+
+        let test = named "Tests.A" true
+        let grouping = named "Tests.A" false
+        let child = named "Tests.A.B" true
+
+        Expect.notEqual test.Id grouping.Id "a test and a grouping never share an id"
+        Expect.equal child.ParentId (Some grouping.Id) "the nested test hangs off the grouping"
+        Expect.equal test.ParentId (named "Tests" false |> _.Id |> Some) "the test hangs off its own parent" ]

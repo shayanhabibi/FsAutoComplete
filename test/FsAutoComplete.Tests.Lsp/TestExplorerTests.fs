@@ -583,19 +583,26 @@ let tests createServer =
 
              Expect.isEmpty duplicateIds "ids stay distinct"
 
-             // The platform keys its tests by uid and VSTest by name, so the two could not collide
-             // even unscoped; what matters is that each id is scoped to its project and framework.
-             let unscoped =
+             // An id routes its test to the project, framework and platform that run it.
+             let misrouted =
                discovered
                |> List.filter _.IsLeaf
                |> List.filter (fun item ->
-                 let key = item.PlatformUid |> Option.defaultValue item.FullName
+                 match FsAutoComplete.TestServer.TestId.tryParse item.Id with
+                 | Ok parsed ->
+                   let platformMatches =
+                     match parsed.Target with
+                     | FsAutoComplete.TestServer.TestIdTarget.VsTestCase _ -> isVsTestItem item
+                     | FsAutoComplete.TestServer.TestIdTarget.MtpNode _ -> not (isVsTestItem item)
+                     | FsAutoComplete.TestServer.TestIdTarget.Group _ -> false
 
-                 item.Id
-                 <> FsAutoComplete.TestServer.TestItem.idOf item.ProjectFilePath item.TargetFramework key)
+                   parsed.ProjectFilePath <> item.ProjectFilePath
+                   || parsed.TargetFramework <> item.TargetFramework
+                   || not platformMatches
+                 | Error _ -> true)
                |> List.map _.Id
 
-             Expect.isEmpty unscoped "every test's id is scoped to its project and framework"
+             Expect.isEmpty misrouted "every test's id names its own project, framework and platform"
 
              let itemsById = discovered |> List.map (fun item -> item.Id, item) |> Map.ofList
 

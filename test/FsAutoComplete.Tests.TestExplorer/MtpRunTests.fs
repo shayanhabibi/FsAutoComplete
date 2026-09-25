@@ -51,6 +51,18 @@ let tests =
         Expect.isSome failed.Error "the server says why the test failed"
       }
 
+      testCaseAsync "carries what a test printed through to its result"
+      <| async {
+        let! results = runAll ()
+        let printed = byName "Tests.Writes to stdout" results
+        let actual = TestResult.ofMtpNode "Mtp.XUnit.fsproj" "net8.0" printed
+
+        Expect.stringContains
+          (actual.AdditionalOutput |> Option.defaultValue "")
+          "Where do I show up in the results"
+          "the result keeps the test's console output"
+      }
+
       testCaseAsync "reports a skipped test as skipped"
       <| async {
         let! results = runAll ()

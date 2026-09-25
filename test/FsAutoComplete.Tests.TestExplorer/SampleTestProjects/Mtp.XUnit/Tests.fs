@@ -33,3 +33,7 @@ let ``Waits for cancellation`` () =
 
     while System.IO.File.Exists gate && elapsed.Elapsed < System.TimeSpan.FromSeconds 60.0 do
       System.Threading.Thread.Sleep 25
+
+// xunit.v3 hands Console output to the platform only when the assembly asks for it.
+[<assembly: CaptureConsole>]
+do ()

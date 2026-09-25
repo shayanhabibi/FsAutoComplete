@@ -100,6 +100,29 @@ module MtpWrapper =
       (fun client -> client.ShutdownAsync())
       work
 
+  /// Runs <c>work</c> for one application of several, so that one which is not built, cannot be
+  /// launched or fails partway is reported at error level instead of failing the others. Its
+  /// outcome is <c>Error</c> with the failure; cancellation is not contained.
+  let private isolatedAsync
+    (logError: string -> unit)
+    (application: TestApplication)
+    (work: Async<'T list>)
+    : Async<Result<'T list, exn>> =
+    async {
+      if not (IO.File.Exists application) then
+        let message =
+          $"Skipped test application '{application}': it does not exist. Build its project first."
+
+        logError message
+        return Result.Error(IO.FileNotFoundException(message, application) :> exn)
+      else
+        match! Async.Catch work with
+        | Choice1Of2 nodes -> return Ok nodes
+        | Choice2Of2 error ->
+          logError $"Test application '{application}' failed: {error.Message}"
+          return Result.Error error
+    }
+
   /// Collects every node an application reports, notifying as the batches arrive.
   let private discoverFromAsync (notify: TestDiscoveryUpdate -> unit) (application: TestApplication) =
     withClientAsync application (fun cancellationToken client ->
@@ -217,35 +240,54 @@ module MtpWrapper =
       })
 
   /// Runs the requested tests of every given application. A debugger is attached only where the
-  /// application asks for one, which it does when the run was started under a debugger.
+  /// application asks for one, which it does when the run was started under a debugger. An
+  /// application that cannot run is reported and the others still run; only a run in which no
+  /// application could run fails, with the first application's failure.
   let runTestsWithDebuggerAsync
     (notify: TestRunUpdate -> unit)
     (onAttachDebugger: (ProcessId -> DidDebuggerAttach) option)
     (requests: RunRequest list)
     : Async<RunNode list> =
     async {
+      let logError message = notify (TestRunUpdate.LogMessage(ClientLogLevel.Error, message))
+
       // The platform treats an empty uid collection as "run all". An explicit empty
       // selection must therefore never be sent to an application.
       let! perApplication =
         requests
         |> List.filter (fun (_, selection) -> selection <> TestSelection.Uids [])
-        |> List.map (runOnAsync notify onAttachDebugger)
+        |> List.map (fun request -> isolatedAsync logError (fst request) (runOnAsync notify onAttachDebugger request))
         |> Async.Sequential
 
-      return perApplication |> List.concat
+      let failures =
+        perApplication
+        |> Array.choose (function
+          | Result.Error error -> Some error
+          | Ok _ -> None)
+
+      if failures.Length > 0 && failures.Length = perApplication.Length then
+        return rethrow failures[0]
+      else
+        return perApplication |> Seq.collect (Result.defaultValue []) |> List.ofSeq
     }
 
   /// Runs the requested tests of every given application, undebugged.
   let runTestsAsync (notify: TestRunUpdate -> unit) (requests: RunRequest list) : Async<RunNode list> =
     runTestsWithDebuggerAsync notify None requests
 
-  /// Discovers the tests of every given application.
+  /// Discovers the tests of every given application. An application that cannot be discovered is
+  /// reported and contributes no tests.
   let discoverTestsAsync
     (notify: TestDiscoveryUpdate -> unit)
     (applications: TestApplication list)
     : Async<DiscoveredNode list> =
     async {
-      let! perApplication = applications |> List.map (discoverFromAsync notify) |> Async.Sequential
+      let logError message = notify (TestDiscoveryUpdate.LogMessage(ClientLogLevel.Error, message))
 
-      return perApplication |> List.concat
+      let! perApplication =
+        applications
+        |> List.map (fun application -> isolatedAsync logError application (discoverFromAsync notify application))
+        |> Async.Sequential
+
+      return perApplication |> Seq.collect (Result.defaultValue []) |> List.ofSeq
     }

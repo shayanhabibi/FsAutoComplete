@@ -19,6 +19,12 @@ let private runAll () = MtpWrapper.runTestsAsync ignore [ sampleApp, MtpWrapper.
 let private byName name (results: MtpWrapper.RunNode list) =
   results |> List.find (fun (_, node) -> nameOf node = name) |> snd
 
+/// Collects the messages logged at error level.
+let private errorsInto (errors: ResizeArray<string>) =
+  function
+  | MtpWrapper.TestRunUpdate.LogMessage(ClientLogLevel.Error, message) -> errors.Add message
+  | _ -> ()
+
 [<Tests>]
 let tests =
   testList
@@ -242,4 +248,75 @@ let tests =
       <| async {
         let! results = MtpWrapper.runTestsAsync ignore [ sampleApp, MtpWrapper.TestSelection.Uids [] ]
         Expect.isEmpty results "an empty selection does not turn into a request to run all tests"
-      } ]
+      }
+
+      testCaseAsync "an application that does not exist is reported and the others still run"
+      <| async {
+        let errors = ResizeArray()
+
+        let! results =
+          MtpWrapper.runTestsAsync
+            (errorsInto errors)
+            [ ResourceLocators.missingApp, MtpWrapper.TestSelection.All
+              sampleApp, MtpWrapper.TestSelection.All ]
+
+        Expect.equal
+          (byName "Tests.My test" results).ExecutionState
+          (Some ExecutionState.Passed)
+          "the built application still ran"
+
+        Expect.all results (fun (source, _) -> source = sampleApp) "the missing application reports no results"
+
+        Expect.exists
+          errors
+          (fun message -> message.Contains ResourceLocators.missingApp)
+          $"an error names the missing application; errors: {List.ofSeq errors}"
+      }
+
+      testCaseAsync "an application that fails to start is reported and the others still run"
+      <| ResourceLocators.withBrokenApp (fun brokenApp ->
+        async {
+          let errors = ResizeArray()
+
+          let! results =
+            MtpWrapper.runTestsAsync
+              (errorsInto errors)
+              [ brokenApp, MtpWrapper.TestSelection.All
+                sampleApp, MtpWrapper.TestSelection.All ]
+
+          Expect.equal
+            (byName "Tests.My test" results).ExecutionState
+            (Some ExecutionState.Passed)
+            "the working application still ran"
+
+          Expect.all results (fun (source, _) -> source = sampleApp) "the broken application reports no results"
+
+          Expect.exists
+            errors
+            (fun message -> message.Contains brokenApp)
+            $"an error names the broken application; errors: {List.ofSeq errors}"
+        })
+
+      testCaseAsync "a run in which no application could run fails, after reporting each"
+      <| ResourceLocators.withBrokenApp (fun brokenApp ->
+        async {
+          let errors = ResizeArray()
+
+          let! outcome =
+            MtpWrapper.runTestsAsync
+              (errorsInto errors)
+              [ ResourceLocators.missingApp, MtpWrapper.TestSelection.All
+                brokenApp, MtpWrapper.TestSelection.All ]
+            |> Async.Catch
+
+          match outcome with
+          | Choice1Of2 results -> failtest $"expected the run to fail, got {results}"
+          | Choice2Of2 _ -> ()
+
+          Expect.exists
+            errors
+            (fun message -> message.Contains ResourceLocators.missingApp)
+            "the missing application is reported"
+
+          Expect.exists errors (fun message -> message.Contains brokenApp) "the broken application is reported"
+        }) ]

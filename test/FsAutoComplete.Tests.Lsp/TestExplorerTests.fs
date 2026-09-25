@@ -27,6 +27,10 @@ module TestRunResult =
   [<Literal>]
   let InvalidParams = -32602
 
+  /// The JSON-RPC code for a request the server accepted but could not carry out.
+  [<Literal>]
+  let InternalError = -32603
+
   let expectInvalidParams (res: LspResult<PlainNotification option>) message =
     match res with
     | Ok _ -> failtest $"{message}: the run was accepted"
@@ -91,6 +95,19 @@ module MixedWorkspace =
 
   /// The name of the process the platform launches for the MTP project's apphost.
   let mtpProcessName = "Mtp.XUnit"
+
+  /// The MTP project's build output, which the server launches.
+  let mtpTargetPath =
+    Path.Combine(Path.GetDirectoryName mtpProject, "bin", "Debug", "net8.0", "Mtp.XUnit.dll")
+
+  /// Moves the MTP project's build output aside until disposed, as if the project had not been
+  /// built since the server loaded it.
+  let hideMtpBuild () =
+    let hidden = mtpTargetPath + ".hidden"
+    File.Move(mtpTargetPath, hidden, true)
+
+    { new System.IDisposable with
+        member _.Dispose() = File.Move(hidden, mtpTargetPath, true) }
 
   let isFrom (project: string) (projectFilePath: string) =
     System.String.Equals(
@@ -537,6 +554,36 @@ let tests createServer =
                  |> processIds.Add)
 
            processIds, subscription
+
+         /// Every message logged at the given level by discovery and by runs.
+         let collectLogs level (event: ClientEvents) =
+           let logs = System.Collections.Concurrent.ConcurrentBag<string>()
+
+           let subscription =
+             event.Subscribe(fun (msgType: string, data: obj) ->
+               let testLogs =
+                 match msgType with
+                 | "test/testDiscoveryUpdate" ->
+                   let progress: TestDiscoveryUpdateNotification =
+                     data :?> PlainNotification
+                     |> _.Content
+                     |> FsAutoComplete.JsonSerializer.readJson
+
+                   progress.TestLogs
+                 | "test/testRunProgressUpdate" ->
+                   let progress: TestRunProgress =
+                     data :?> PlainNotification
+                     |> _.Content
+                     |> FsAutoComplete.JsonSerializer.readJson
+
+                   progress.TestLogs
+                 | _ -> [||]
+
+               testLogs
+               |> Array.filter (fun log -> log.Level = level)
+               |> Array.iter (fun log -> logs.Add log.Message))
+
+           logs, subscription
 
          let isVsTestItem (item: FsAutoComplete.TestServer.TestItem) =
            item.ExecutorUri <> FsAutoComplete.TestServer.TestItem.mtpExecutorUri
@@ -1056,6 +1103,78 @@ let tests createServer =
                warnings
                (fun message -> message.Contains vanishedMtp)
                "the missing platform id is named in a warning"
+           }
+
+           testCaseAsync "an unbuilt testing platform project is reported and VSTest's tests are still discovered"
+           <| async {
+             let! server, event = initializeMixedServer ()
+             use server = server
+             let errors, subscription = collectLogs "Error" event
+             use _ = subscription
+             use mtpLaunches = new ProcessLaunchWatch(MixedWorkspace.mtpProcessName)
+             use _ = MixedWorkspace.hideMtpBuild ()
+
+             let! res = server.TestDiscoverTests()
+             let discovered = TestDiscoveryResult.tryUnwrapTestDiscoveryResult res
+
+             Expect.equal
+               (discovered |> List.filter _.IsLeaf |> List.map _.FullName)
+               [ "Tests.My test" ]
+               "VSTest's test is still discovered"
+
+             expectOnlyFrom MixedWorkspace.vsTestProject discovered "the unbuilt project contributes no tests"
+
+             Expect.exists
+               errors
+               (fun message -> message.Contains MixedWorkspace.mtpTargetPath)
+               $"an error names the unbuilt application; errors: {List.ofSeq errors}"
+
+             Expect.isFalse mtpLaunches.Launched "the unbuilt application is not launched"
+           }
+
+           testCaseAsync
+             "a testing platform application that cannot run leaves VSTest's results and warns about its ids"
+           <| async {
+             let! server, event = initializeMixedServer ()
+             use server = server
+             let! vsTest = discoverLeaf server MixedWorkspace.vsTestProject "Tests.My test"
+             let! mtp = discoverLeaf server MixedWorkspace.mtpProject "Tests.My test"
+             let errors, errorSubscription = collectLogs "Error" event
+             use _ = errorSubscription
+             let warnings, warningSubscription = collectLogs "Warning" event
+             use _ = warningSubscription
+             use _ = MixedWorkspace.hideMtpBuild ()
+
+             let! res = server.TestRunTests(idRun [| vsTest.Id; mtp.Id |])
+
+             Expect.equal
+               (TestRunResult.tryUnwrapTestRunResult res |> List.map _.TestItem.Id)
+               [ vsTest.Id ]
+               "VSTest's test still ran"
+
+             Expect.exists
+               errors
+               (fun message -> message.Contains MixedWorkspace.mtpTargetPath)
+               $"an error names the application that could not run; errors: {List.ofSeq errors}"
+
+             Expect.exists
+               warnings
+               (fun message -> message.Contains mtp.Id)
+               $"the id that could not run is named in a warning; warnings: {List.ofSeq warnings}"
+           }
+
+           testCaseAsync "a run in which nothing could run fails"
+           <| async {
+             let! server, _ = initializeMixedServer ()
+             use server = server
+             let! mtp = discoverLeaf server MixedWorkspace.mtpProject "Tests.My test"
+             use _ = MixedWorkspace.hideMtpBuild ()
+
+             let! res = server.TestRunTests(idRun [| mtp.Id |])
+
+             match res with
+             | Ok _ -> failtest "the run succeeded although nothing could run"
+             | Error err -> Expect.equal err.Code TestRunResult.InternalError $"the run failed: {err.Message}"
            } ])
       testList
         "RunTests"

@@ -3129,12 +3129,19 @@ type AdaptiveState
             return results, unresolved
           }
 
+      // An application that could not run has been reported, and its ids are warned about below.
+      // The run fails only when nothing in it could run.
       let! mtpNodes =
         TestServer.MtpWrapper.runTestsWithDebuggerAsync
           onMtpRunProgress
           (if shouldDebug then Some onAttachDebugger else None)
           (mtpRuns
            |> List.map (fun (project, mtpSelection) -> project.TargetPath, mtpSelection))
+        |> Async.Catch
+        |> Async.map (function
+          | Choice1Of2 nodes -> Ok nodes
+          | Choice2Of2 _ when not (List.isEmpty testResults) -> Ok []
+          | Choice2Of2 error -> Error(TestServer.TestRunError.RunFailed error.Message))
 
       let unresolvedMtpIds =
         let reported =

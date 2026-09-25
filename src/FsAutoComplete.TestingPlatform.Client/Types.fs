@@ -69,6 +69,16 @@ type NodeError =
   { Message: string option
     StackTrace: string option }
 
+/// <summary>The method a test node runs, as the framework identifies it.</summary>
+type MethodIdentifier =
+  {
+    /// <summary>Reported apart from the type before platform 2.0, which folds it into the type name.</summary>
+    Namespace: string option
+    TypeName: string
+    /// <summary>The method name, followed by its parameter types when it has any.</summary>
+    MethodName: string option
+  }
+
 /// <summary>One node in a <c>testing/testUpdates/tests</c> notification.</summary>
 type TestNodeUpdate =
   {
@@ -78,6 +88,7 @@ type TestNodeUpdate =
     ExecutionState: ExecutionState option
     ParentUid: string option
     Location: SourceLocation option
+    MethodIdentifier: MethodIdentifier option
     Duration: TimeSpan option
     Error: NodeError option
     StandardOutput: string option

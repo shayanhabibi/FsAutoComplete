@@ -24,6 +24,7 @@ let private mtpNode nodeType uid : TestNodeUpdate =
     ExecutionState = None
     ParentUid = None
     Location = None
+    MethodIdentifier = None
     Duration = None
     Error = None
     StandardOutput = None

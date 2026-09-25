@@ -8,6 +8,7 @@
     <Compile Include="Interop.fs" />
     <Compile Include="MtpClient.fs" />
     <ProjectReference Include="../FsAutoComplete.TestingPlatform.Client.Protocol/FsAutoComplete.TestingPlatform.Client.Protocol.csproj" />
+    <InternalsVisibleTo Include="FsAutoComplete.Tests.TestExplorer" />
   </ItemGroup>
   <Import Project="../../.paket/Paket.Restore.targets" />
 </Project>

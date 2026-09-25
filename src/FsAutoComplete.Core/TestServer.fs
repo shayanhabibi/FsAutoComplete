@@ -284,14 +284,32 @@ module TestItem =
     let isLeaf =
       node.NodeType <> Some FsAutoComplete.TestingPlatform.Client.NodeType.Group
 
+    let displayName = node.DisplayName |> Option.defaultValue node.Uid
+
+    // MSTest displays a test by its method name alone, where xUnit displays the name of its type
+    // too, so a display name is qualified by the test's type unless it already is.
+    let fullName =
+      match node.MethodIdentifier with
+      | Some identifier ->
+        let typeName =
+          match identifier.Namespace with
+          | Some ns -> $"{ns}.{identifier.TypeName}"
+          | None -> identifier.TypeName
+
+        if displayName.StartsWith($"{typeName}.", StringComparison.Ordinal) then
+          displayName
+        else
+          $"{typeName}.{displayName}"
+      | None -> displayName
+
     { Id = TestId.ofMtpNode projFilePath targetFramework node
       ParentId =
         node.ParentUid
         |> Option.filter (String.IsNullOrEmpty >> not)
         |> Option.map parentIdOf
       IsLeaf = isLeaf
-      FullName = node.DisplayName |> Option.defaultValue node.Uid
-      DisplayName = node.DisplayName |> Option.defaultValue node.Uid
+      FullName = fullName
+      DisplayName = displayName
       ExecutorUri = mtpExecutorUri
       ProjectFilePath = projFilePath
       TargetFramework = targetFramework

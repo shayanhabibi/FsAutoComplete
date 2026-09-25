@@ -15,6 +15,7 @@ let private node uid : TestNodeUpdate =
     ExecutionState = None
     ParentUid = None
     Location = None
+    MethodIdentifier = None
     Duration = None
     Error = None
     StandardOutput = None
@@ -22,6 +23,16 @@ let private node uid : TestNodeUpdate =
     Raw = Dictionary<string, obj>() }
 
 let private map (n: TestNodeUpdate) = TestItem.ofMtpNode project framework n
+
+/// A test reported with the method it runs, as MSTest, NUnit and TUnit report their short names.
+let private identified ns typeName displayName =
+  { node "a3f9" with
+      DisplayName = Some displayName
+      MethodIdentifier =
+        Some
+          { Namespace = ns
+            TypeName = typeName
+            MethodName = Some "Test1" } }
 
 [<Tests>]
 let mtpNodeTests =
@@ -53,6 +64,51 @@ let mtpNodeTests =
         let actual = map (node "a3f9")
 
         Expect.equal actual.FullName "a3f9" "the uid names the node when the server sends no display name"
+
+      testCase "a short display name is qualified by the test's type"
+      <| fun _ ->
+        let actual = map (identified (Some "MyNamespace") "ClassA" "Test1")
+
+        Expect.equal actual.FullName "MyNamespace.ClassA.Test1" "the namespace and type qualify the method name"
+
+      testCase "a data row is qualified by the test's type"
+      <| fun _ ->
+        let actual = map (identified (Some "MyNamespace") "ClassA" "Test1 (1,2)")
+
+        Expect.equal actual.FullName "MyNamespace.ClassA.Test1 (1,2)" "the row's data stays after the method name"
+
+      testCase "a type in no namespace qualifies a short display name alone"
+      <| fun _ ->
+        let actual = map (identified None "Tests" "Adds")
+
+        Expect.equal actual.FullName "Tests.Adds" "the type alone qualifies the method name"
+
+      testCase "a display name already qualified by its type is the full name"
+      <| fun _ ->
+        let actual = map (identified None "Tests" "Tests.My theory(n: 2)")
+
+        Expect.equal actual.FullName "Tests.My theory(n: 2)" "the name is not qualified twice"
+
+      testCase "a display name already qualified by its namespace and type is the full name"
+      <| fun _ ->
+        let actual = map (identified (Some "MyNamespace") "Tests" "MyNamespace.Tests.Adds")
+
+        Expect.equal actual.FullName "MyNamespace.Tests.Adds" "the name is not qualified twice"
+
+      testCase "a short display name is still the label"
+      <| fun _ ->
+        let actual = map (identified (Some "MyNamespace") "ClassA" "Test1")
+
+        Expect.equal actual.DisplayName "Test1" "the server names the node"
+
+      testCase "tests of one name in two types have different full names"
+      <| fun _ ->
+        let names =
+          [ map (identified (Some "MyNamespace") "ClassA" "Test1")
+            map (identified (Some "MyNamespace") "ClassB" "Test1") ]
+          |> List.map _.FullName
+
+        Expect.equal (List.distinct names |> List.length) 2 "each type's test has its own name"
 
       testCase "a parent uid is scoped the same way as the node's own id"
       <| fun _ ->
@@ -391,7 +447,46 @@ let mtpHierarchyTests =
            |> List.map _.FullName
            |> List.sort)
           [ "Flat"; "Flat.Adds" ]
-          "the flat project is grouped by its names" ]
+          "the flat project is grouped by its names"
+
+      testCase "short display names are grouped by namespace and type"
+      <| fun _ ->
+        let test uid typeName displayName =
+          { node uid with
+              DisplayName = Some displayName
+              MethodIdentifier =
+                Some
+                  { Namespace = Some "MyNamespace"
+                    TypeName = typeName
+                    MethodName = Some "Test1" } }
+
+        let actual =
+          TestItem.ofMtpNodes
+            project
+            framework
+            [ test "a3f9" "ClassA" "Test1"
+              test "b1c2" "ClassA" "Test1 (1,2)"
+              test "c7d8" "ClassB" "Test1" ]
+          |> TestHierarchy.withHierarchy
+
+        let parentNameOf (item: TestItem) =
+          actual
+          |> List.tryFind (fun p -> Some p.Id = item.ParentId)
+          |> Option.map _.FullName
+
+        Expect.equal
+          (actual
+           |> List.filter _.IsLeaf
+           |> List.map (fun t -> t.DisplayName, parentNameOf t))
+          [ "Test1", Some "MyNamespace.ClassA"
+            "Test1 (1,2)", Some "MyNamespace.ClassA"
+            "Test1", Some "MyNamespace.ClassB" ]
+          "each test hangs off its type"
+
+        Expect.equal
+          (actual |> List.filter (_.IsLeaf >> not) |> List.map _.FullName |> List.sort)
+          [ "MyNamespace"; "MyNamespace.ClassA"; "MyNamespace.ClassB" ]
+          "the namespace and each type become groups" ]
 
 [<Tests>]
 let mtpOutcomeTests =
@@ -564,3 +659,51 @@ let mtpResultTests =
                 ExecutionState = Some ExecutionState.Passed }
 
         Expect.isNone actual.AdditionalOutput "the test printed nothing" ]
+
+[<Tests>]
+let mtpWireTests =
+  let update (properties: (string * obj) list) =
+    let wire = Dictionary<string, obj>()
+    wire["uid"] <- "a3f9"
+
+    for key, value in properties do
+      wire[key] <- value
+
+    Interop.toUpdate (fun _ _ -> ()) None wire |> Option.get
+
+  testList
+    "Interop.toUpdate"
+    [ testCase "the method identifier is read off the node"
+      <| fun _ ->
+        let actual =
+          update
+            [ "location.namespace", box "MyNamespace"
+              "location.type", box "ClassA"
+              "location.method", box "Test1(System.Int32)"
+              "location.method-arity", box 0 ]
+
+        Expect.equal
+          actual.MethodIdentifier
+          (Some
+            { Namespace = Some "MyNamespace"
+              TypeName = "ClassA"
+              MethodName = Some "Test1(System.Int32)" })
+          "the namespace, type and method are carried over"
+
+      testCase "a type reported with its namespace has no namespace of its own"
+      <| fun _ ->
+        let actual = update [ "location.type", box "MyNamespace.ClassA" ]
+
+        Expect.equal
+          actual.MethodIdentifier
+          (Some
+            { Namespace = None
+              TypeName = "MyNamespace.ClassA"
+              MethodName = None })
+          "the platform folds the namespace into the type from 2.0"
+
+      testCase "a node without a type has no method identifier"
+      <| fun _ ->
+        let actual = update [ "location.method", box "Test1" ]
+
+        Expect.isNone actual.MethodIdentifier "a method means nothing without its type" ]

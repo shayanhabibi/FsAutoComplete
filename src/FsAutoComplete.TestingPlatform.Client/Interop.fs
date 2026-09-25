@@ -53,6 +53,13 @@ let toUpdate
           LineStart = tryNumber "location.line-start" node |> Option.map int
           LineEnd = tryNumber "location.line-end" node |> Option.map int })
 
+    let methodIdentifier =
+      tryString "location.type" node
+      |> Option.map (fun typeName ->
+        { Namespace = tryString "location.namespace" node
+          TypeName = typeName
+          MethodName = tryString "location.method" node })
+
     let error =
       match tryString "error.message" node, tryString "error.stacktrace" node with
       | None, None -> None
@@ -68,6 +75,7 @@ let toUpdate
         ExecutionState = tryString "execution-state" node |> Option.map toExecutionState
         ParentUid = parentUid
         Location = location
+        MethodIdentifier = methodIdentifier
         Duration = tryNumber "time.duration-ms" node |> Option.map TimeSpan.FromMilliseconds
         Error = error
         StandardOutput = tryString "standardOutput" node

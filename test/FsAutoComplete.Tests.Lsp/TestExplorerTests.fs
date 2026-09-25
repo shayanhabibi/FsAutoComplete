@@ -524,6 +524,20 @@ let tests createServer =
 
            reported, subscription
 
+         /// Every process the client was asked to attach a debugger to.
+         let collectAttachRequests (event: ClientEvents) =
+           let processIds = System.Collections.Concurrent.ConcurrentBag<int>()
+
+           let subscription =
+             event.Subscribe(fun (msgType: string, data: obj) ->
+               if msgType = "test/processWaitingForDebugger" then
+                 data :?> PlainNotification
+                 |> _.Content
+                 |> FsAutoComplete.JsonSerializer.readJson<int>
+                 |> processIds.Add)
+
+           processIds, subscription
+
          let isVsTestItem (item: FsAutoComplete.TestServer.TestItem) =
            item.ExecutorUri <> FsAutoComplete.TestServer.TestItem.mtpExecutorUri
 
@@ -786,6 +800,55 @@ let tests createServer =
                "each result carries the id discovery issued"
            }
 
+           testCaseAsync "debugging ids from both platforms asks to attach to each process once"
+           <| async {
+             let! server, event = initializeMixedServer ()
+             use server = server
+             let! vsTest = discoverLeaf server MixedWorkspace.vsTestProject "Tests.My test"
+             let! mtp = discoverLeaf server MixedWorkspace.mtpProject "Tests.My test"
+             let attachRequests, subscription = collectAttachRequests event
+             use _ = subscription
+
+             let! res =
+               server.TestRunTests(
+                 { idRun [| vsTest.Id; mtp.Id |] with
+                     AttachDebugger = true }
+               )
+
+             let results = TestRunResult.tryUnwrapTestRunResult res
+
+             Expect.equal
+               (results |> List.map _.TestItem.Id |> List.sort)
+               (List.sort [ vsTest.Id; mtp.Id ])
+               "each id ran its own test once"
+
+             Expect.hasLength attachRequests 2 "the VSTest host and the testing platform application"
+           }
+
+           testCaseAsync "debugging a VSTest id attaches to its host alone"
+           <| async {
+             let! server, event = initializeMixedServer ()
+             use server = server
+             let! selected = discoverLeaf server MixedWorkspace.vsTestProject "Tests.My test"
+             let attachRequests, subscription = collectAttachRequests event
+             use _ = subscription
+             use mtpLaunches = new ProcessLaunchWatch(MixedWorkspace.mtpProcessName)
+
+             let! res =
+               server.TestRunTests(
+                 { idRun [| selected.Id |] with
+                     AttachDebugger = true }
+               )
+
+             Expect.equal
+               (TestRunResult.tryUnwrapTestRunResult res |> List.map _.TestItem.Id)
+               [ selected.Id ]
+               "exactly the selected VSTest test ran"
+
+             Expect.hasLength attachRequests 1 "only the VSTest host was offered to the debugger"
+             Expect.isFalse mtpLaunches.Launched "the testing platform application was not launched"
+           }
+
            testCaseAsync "a testing platform id alone never reaches VSTest"
            <| async {
              // Discovery needs VSTest for the other project, so the id is found by a server that
@@ -834,11 +897,41 @@ let tests createServer =
              Expect.isFalse mtpLaunches.Launched "the testing platform application was not launched"
            }
 
+           testCaseAsync "a filter limited to the VSTest project runs on VSTest alone"
+           <| async {
+             let! server, event = initializeMixedServer ()
+             use server = server
+             let reported, subscription = collectRunProgress event
+             use _ = subscription
+             use mtpLaunches = new ProcessLaunchWatch(MixedWorkspace.mtpProcessName)
+
+             // With the platform's project out of scope, the filter selects nothing it cannot read.
+             let runRequest: TestRunRequest =
+               { LimitToProjects = Some [ MixedWorkspace.vsTestProject ]
+                 TestCaseFilter = Some "FullyQualifiedName~My test"
+                 TestIds = None
+                 AttachDebugger = false }
+
+             let! res = server.TestRunTests(runRequest)
+             let results = TestRunResult.tryUnwrapTestRunResult res
+
+             Expect.equal
+               (results |> List.map (fun result -> result.TestItem.FullName, result.Outcome))
+               [ "Tests.My test", FsAutoComplete.TestServer.TestOutcome.Passed ]
+               "the filter selected the VSTest test"
+
+             expectOnlyFrom MixedWorkspace.vsTestProject (results |> List.map _.TestItem) "only VSTest results"
+             expectOnlyFrom MixedWorkspace.vsTestProject (List.ofSeq reported) "only VSTest progress"
+             Expect.isFalse mtpLaunches.Launched "the testing platform application was not launched"
+           }
+
            testCaseAsync "ids and a filter together are rejected before anything runs"
            <| async {
-             let! server, _ = initializeMixedServer ()
+             let! server, event = initializeMixedServer ()
              use server = server
              let! selected = discoverLeaf server MixedWorkspace.vsTestProject "Tests.My test"
+             let reported, subscription = collectRunProgress event
+             use _ = subscription
              use mtpLaunches = new ProcessLaunchWatch(MixedWorkspace.mtpProcessName)
 
              let! res =
@@ -848,6 +941,7 @@ let tests createServer =
                )
 
              TestRunResult.expectInvalidParams res "ids and a filter are alternatives"
+             Expect.isEmpty reported "no test was run"
              Expect.isFalse mtpLaunches.Launched "the testing platform application was not launched"
            }
 
@@ -866,6 +960,15 @@ let tests createServer =
 
              let grouping = discovered |> List.find (fun test -> not test.IsLeaf)
 
+             let mtp =
+               discovered
+               |> List.find (fun test ->
+                 test.IsLeaf
+                 && MixedWorkspace.isFrom MixedWorkspace.mtpProject test.ProjectFilePath)
+
+             let vsTestKindForMtpProject =
+               $"t1|vs|{FsAutoComplete.TestServer.TestId.escape mtp.ProjectFilePath}|{mtp.TargetFramework}|{System.Guid.NewGuid():D}"
+
              let unknownProject =
                let project =
                  Path.Combine(__SOURCE_DIRECTORY__, "SampleTestProjects", "Nope", "Nope.fsproj")
@@ -878,6 +981,7 @@ let tests createServer =
                [ "a malformed id", idRun [| "not a test id" |]
                  "a grouping id", idRun [| grouping.Id |]
                  "an id of a project outside the workspace", idRun [| unknownProject |]
+                 "an id of a platform its project does not run on", idRun [| vsTestKindForMtpProject |]
                  "an id outside LimitToProjects",
                  { idRun [| vsTest.Id |] with
                      LimitToProjects = Some [ MixedWorkspace.mtpProject ] } ] do
@@ -899,14 +1003,34 @@ let tests createServer =
              Expect.isFalse mtpLaunches.Launched "the testing platform application was not launched"
            }
 
+           testCaseAsync "an empty id selection reaches neither platform when both are available"
+           <| async {
+             let! server, event = initializeMixedServer ()
+             use server = server
+             let reported, subscription = collectRunProgress event
+             use _ = subscription
+             use mtpLaunches = new ProcessLaunchWatch(MixedWorkspace.mtpProcessName)
+
+             let! res = server.TestRunTests(idRun [||])
+
+             Expect.isEmpty (TestRunResult.tryUnwrapTestRunResult res) "no tests were selected"
+             Expect.isEmpty reported "no test was run"
+             Expect.isFalse mtpLaunches.Launched "the testing platform application was not launched"
+           }
+
            testCaseAsync "an id that discovery no longer reports is warned about, not dropped silently"
            <| async {
              let! server, event = initializeMixedServer ()
              use server = server
              let! vsTest = discoverLeaf server MixedWorkspace.vsTestProject "Tests.My test"
 
+             let! mtp = discoverLeaf server MixedWorkspace.mtpProject "Tests.My test"
+
              let vanished =
                $"t1|vs|{FsAutoComplete.TestServer.TestId.escape vsTest.ProjectFilePath}|{vsTest.TargetFramework}|{System.Guid.NewGuid():D}"
+
+             let vanishedMtp =
+               $"t1|mtp|{FsAutoComplete.TestServer.TestId.escape mtp.ProjectFilePath}|{mtp.TargetFramework}|no-such-uid"
 
              let warnings = System.Collections.Concurrent.ConcurrentBag<string>()
 
@@ -922,11 +1046,16 @@ let tests createServer =
                    |> Array.filter (fun log -> log.Level = "Warning")
                    |> Array.iter (fun log -> warnings.Add log.Message))
 
-             let! res = server.TestRunTests(idRun [| vanished |])
+             let! res = server.TestRunTests(idRun [| vanished; vanishedMtp |])
 
              Expect.isEmpty (TestRunResult.tryUnwrapTestRunResult res) "the missing test has no result"
 
              Expect.exists warnings (fun message -> message.Contains vanished) "the missing id is named in a warning"
+
+             Expect.exists
+               warnings
+               (fun message -> message.Contains vanishedMtp)
+               "the missing platform id is named in a warning"
            } ])
       testList
         "RunTests"
@@ -963,6 +1092,53 @@ let tests createServer =
               (results |> List.map (fun result -> result.TestItem.Id, result.Outcome))
               [ rowTwo.Id, FsAutoComplete.TestServer.TestOutcome.Failed ]
               "only row 2 ran, under the id discovery issued"
+          }
+
+          testCaseAsync "a debugged id runs only its row, in one attached process"
+          <| async {
+            let workspaceRoot =
+              Path.Combine(__SOURCE_DIRECTORY__, "ParameterisedSampleProjects")
+
+            let! server, event = initializeServer workspaceRoot
+            use server = server
+            Workspace.build workspaceRoot
+
+            let! discovery = server.TestDiscoverTests()
+
+            let rowTwo =
+              discovery
+              |> TestDiscoveryResult.tryUnwrapTestDiscoveryResult
+              |> List.find (fun test ->
+                test.IsLeaf
+                && test.FullName.StartsWith "Tests.Row two fails"
+                && test.FullName.Contains "x: 2")
+
+            let attachRequests = System.Collections.Concurrent.ConcurrentBag<int>()
+
+            use _ =
+              event.Subscribe(fun (msgType: string, data: obj) ->
+                if msgType = "test/processWaitingForDebugger" then
+                  data :?> PlainNotification
+                  |> _.Content
+                  |> FsAutoComplete.JsonSerializer.readJson<int>
+                  |> attachRequests.Add)
+
+            let! res =
+              server.TestRunTests(
+                { LimitToProjects = None
+                  TestCaseFilter = None
+                  TestIds = Some [| rowTwo.Id |]
+                  AttachDebugger = true }
+              )
+
+            let results = TestRunResult.tryUnwrapTestRunResult res
+
+            Expect.equal
+              (results |> List.map (fun result -> result.TestItem.Id, result.Outcome))
+              [ rowTwo.Id, FsAutoComplete.TestServer.TestOutcome.Failed ]
+              "only row 2 ran, under the id discovery issued"
+
+            Expect.hasLength attachRequests 1 "the test host was offered to the debugger once"
           }
 
           testCaseAsync "it should report tests of all basic outcomes"

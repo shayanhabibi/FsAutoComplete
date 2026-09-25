@@ -278,6 +278,7 @@ let tests createServer =
               { LimitToProjects = None
                 TestCaseFilter = None
                 TestUids = None
+                TestIds = None
                 AttachDebugger = false }
 
             let! res = server.TestRunTests(runRequest)
@@ -329,6 +330,7 @@ let tests createServer =
                     { LimitToProjects = None
                       TestCaseFilter = None
                       TestUids = None
+                      TestIds = None
                       AttachDebugger = true }
                   )
                   |> Async.Ignore,
@@ -371,6 +373,7 @@ let tests createServer =
               { LimitToProjects = None
                 TestCaseFilter = None
                 TestUids = None
+                TestIds = None
                 AttachDebugger = false }
 
             let! _ = server.TestRunTests(runRequest)
@@ -402,6 +405,7 @@ let tests createServer =
               { LimitToProjects = None
                 TestCaseFilter = None
                 TestUids = Some [||]
+                TestIds = None
                 AttachDebugger = false }
 
             let! res = server.TestRunTests(runRequest)
@@ -436,6 +440,7 @@ let tests createServer =
               { LimitToProjects = None
                 TestCaseFilter = None
                 TestUids = Some [| selectedUid |]
+                TestIds = None
                 AttachDebugger = false }
 
             let! res = server.TestRunTests(runRequest)
@@ -469,6 +474,7 @@ let tests createServer =
               { LimitToProjects = None
                 TestCaseFilter = Some "FullyQualifiedName~My test"
                 TestUids = None
+                TestIds = None
                 AttachDebugger = false }
 
             let! res = server.TestRunTests(runRequest)
@@ -629,6 +635,7 @@ let tests createServer =
                { LimitToProjects = Some [ MixedWorkspace.vsTestProject ]
                  TestCaseFilter = None
                  TestUids = None
+                 TestIds = None
                  AttachDebugger = false }
 
              let! res = server.TestRunTests(runRequest)
@@ -658,6 +665,7 @@ let tests createServer =
                { LimitToProjects = None
                  TestCaseFilter = Some "FullyQualifiedName~My test"
                  TestUids = Some [||]
+                 TestIds = None
                  AttachDebugger = false }
 
              let! res = server.TestRunTests(runRequest)
@@ -693,6 +701,7 @@ let tests createServer =
                { LimitToProjects = Some [ MixedWorkspace.mtpProject ]
                  TestCaseFilter = None
                  TestUids = Some [| selectedUid |]
+                 TestIds = None
                  AttachDebugger = false }
 
              let! res = server.TestRunTests(runRequest)
@@ -719,6 +728,7 @@ let tests createServer =
                { LimitToProjects = None
                  TestCaseFilter = None
                  TestUids = None
+                 TestIds = None
                  AttachDebugger = false }
 
              let! res = server.TestRunTests(runRequest)
@@ -768,6 +778,7 @@ let tests createServer =
               { LimitToProjects = None
                 TestCaseFilter = None
                 TestUids = None
+                TestIds = None
                 AttachDebugger = false }
 
             let! res = server.TestRunTests(runRequest)
@@ -814,6 +825,7 @@ let tests createServer =
                   { LimitToProjects = None
                     TestCaseFilter = None
                     TestUids = None
+                    TestIds = None
                     AttachDebugger = true }
 
                 Async.RunSynchronously(
@@ -851,6 +863,7 @@ let tests createServer =
                 { LimitToProjects = None
                   TestCaseFilter = Some "FullyQualifiedName~Tests.Expects environment variable"
                   TestUids = None
+                  TestIds = None
                   AttachDebugger = false }
               )
 
@@ -884,6 +897,7 @@ let tests createServer =
                     Some [ Path.Combine(__SOURCE_DIRECTORY__, "SampleTestProjects", "Nope", "Nope.fsproj") ]
                   TestCaseFilter = None
                   TestUids = None
+                  TestIds = None
                   AttachDebugger = false }
               )
 
@@ -918,6 +932,7 @@ let tests createServer =
                         ) ]
                   TestCaseFilter = None
                   TestUids = None
+                  TestIds = None
                   AttachDebugger = false }
               )
 
@@ -976,6 +991,7 @@ let tests createServer =
                           ) ]
                     TestCaseFilter = None
                     TestUids = None
+                    TestIds = None
                     AttachDebugger = true }
 
                 Async.RunSynchronously(

@@ -206,6 +206,10 @@ type TestRunRequest =
     /// under. Absent runs every test of the projects being run. A platform runs only the uids it
     /// recognises, so a client need not say which project a uid came from.
     TestUids: string array option
+    /// Names the tests to run by the `Id` discovery issued each of them. Only a leaf's id can be
+    /// run; a client expands a grouping node to its leaves. Cannot be combined with
+    /// `TestCaseFilter`. An empty array runs none.
+    TestIds: string array option
     AttachDebugger: bool
   }
 

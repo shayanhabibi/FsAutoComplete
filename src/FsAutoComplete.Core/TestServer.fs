@@ -269,10 +269,8 @@ module TestItem =
   [<Literal>]
   let mtpExecutorUri = "microsoft.testing.platform"
 
-  /// Maps a node of a Microsoft.Testing.Platform test tree onto the shape the clients consume.
-  /// The platform reports parent links and grouping nodes itself, so the result needs no pass
-  /// through `TestHierarchy.withInferredGroupings`.
-  let ofMtpNode
+  let private ofMtpNodeWithParent
+    (parentIdOf: string -> string)
     (projFilePath: string)
     (targetFramework: string)
     (node: FsAutoComplete.TestingPlatform.Client.TestNodeUpdate)
@@ -287,11 +285,10 @@ module TestItem =
       node.NodeType <> Some FsAutoComplete.TestingPlatform.Client.NodeType.Group
 
     { Id = TestId.ofMtpNode projFilePath targetFramework node
-      // Only a group can have children, so a parent is always addressed as one.
       ParentId =
         node.ParentUid
         |> Option.filter (String.IsNullOrEmpty >> not)
-        |> Option.map (TestId.group projFilePath targetFramework)
+        |> Option.map parentIdOf
       IsLeaf = isLeaf
       FullName = node.DisplayName |> Option.defaultValue node.Uid
       DisplayName = node.DisplayName |> Option.defaultValue node.Uid
@@ -300,6 +297,29 @@ module TestItem =
       TargetFramework = targetFramework
       CodeFilePath = node.Location |> Option.map _.File
       CodeLocationRange = node.Location |> Option.bind range }
+
+  /// Maps a node of a Microsoft.Testing.Platform test tree onto the shape the clients consume.
+  /// The platform reports parent links and grouping nodes itself, so the result needs no pass
+  /// through `TestHierarchy.withInferredGroupings`. The parent is not in sight, so it is taken to
+  /// be a grouping; `ofMtpNodes` links a parent that is reported alongside by its own id.
+  let ofMtpNode (projFilePath: string) (targetFramework: string) node =
+    ofMtpNodeWithParent (TestId.group projFilePath targetFramework) projFilePath targetFramework node
+
+  /// Maps nodes one application reported. The node type is optional and a test can have
+  /// children, so each parent reported among the nodes is linked by the id it was given.
+  let ofMtpNodes
+    (projFilePath: string)
+    (targetFramework: string)
+    (nodes: FsAutoComplete.TestingPlatform.Client.TestNodeUpdate list)
+    : TestItem list =
+    let byUid = nodes |> List.map (fun node -> node.Uid, node) |> Map.ofList
+
+    let parentIdOf uid =
+      match byUid.TryFind uid with
+      | Some parent -> TestId.ofMtpNode projFilePath targetFramework parent
+      | None -> TestId.group projFilePath targetFramework uid
+
+    nodes |> List.map (ofMtpNodeWithParent parentIdOf projFilePath targetFramework)
 
   let tryTestCaseToDTO
     (projectLookup: string -> Ionide.ProjInfo.Types.ProjectOptions option)

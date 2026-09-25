@@ -193,6 +193,45 @@ let mtpNodeTests =
           "name breakdown by adapter does not apply to a platform that reports its own tree" ]
 
 [<Tests>]
+let mtpNodesTests =
+  let parentOf (parent: TestNodeUpdate) =
+    let child =
+      { node "a3f9" with
+          ParentUid = Some parent.Uid }
+
+    match TestItem.ofMtpNodes project framework [ parent; child ] with
+    | [ parent; child ] -> parent, child
+    | items -> failwith $"Expected two items, got {List.length items}"
+
+  testList
+    "TestItem.ofMtpNodes"
+    [ // The node type is optional on the wire, and nothing stops a test from having children.
+      for description, nodeType in
+        [ "a grouping", Some NodeType.Group
+          "a test", Some NodeType.Action
+          "a node of no reported type", None ] do
+        testCase $"a child links to {description} parent by the parent's own id"
+        <| fun _ ->
+          let parent, child = parentOf { node "b1c2" with NodeType = nodeType }
+
+          Expect.equal child.ParentId (Some parent.Id) "the parent id is the id the parent was given"
+
+      testCase "a parent reported elsewhere is taken to be a grouping"
+      <| fun _ ->
+        let child =
+          TestItem.ofMtpNodes
+            project
+            framework
+            [ { node "a3f9" with
+                  ParentUid = Some "b1c2" } ]
+          |> List.exactlyOne
+
+        Expect.equal
+          child.ParentId
+          (Some(TestId.group project framework "b1c2"))
+          "only a grouping has children, unless the parent is seen to be otherwise" ]
+
+[<Tests>]
 let idScopeTests =
   let vsTestCase fullName =
     Microsoft.VisualStudio.TestPlatform.ObjectModel.TestCase(

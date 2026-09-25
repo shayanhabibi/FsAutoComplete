@@ -2798,10 +2798,12 @@ type AdaptiveState
           let projectLookup = mtpProjects |> Seq.map (fun p -> p.TargetPath, p) |> Map.ofSeq
 
           nodes
-          |> List.choose (fun (application, node) ->
-            projectLookup.TryFind application
-            |> Option.map (fun project ->
-              TestServer.TestItem.ofMtpNode project.ProjectFileName project.TargetFramework node))
+          |> List.groupBy fst
+          |> List.collect (fun (application, nodes) ->
+            match projectLookup.TryFind application with
+            | Some project ->
+              TestServer.TestItem.ofMtpNodes project.ProjectFileName project.TargetFramework (List.map snd nodes)
+            | None -> [])
           |> TestServer.TestHierarchy.withHierarchy
 
         let onDiscoveryProgress (update: TestServer.VSTestWrapper.TestDiscoveryUpdate) =
